@@ -356,9 +356,11 @@ ANSWER_TYPE_RULES: dict = {
 }
 
 DIFFICULTY_RULES: dict = {
-    1: ('쉬움',   4, 4, 'desc_by_distance', '≥5반음/≥4반음차(오답 멀리)'),
-    2: ('보통',   3, 5, 'shuffle',           '무작위 배치'),
-    3: ('어려움', 3, 6, 'asc_by_distance',  '≤2반음/≤1반음차(오답 가까이)'),
+    # level: (label, octaves, proximity_strategy, proximity_semitones)
+    # rules.md 2-1: 쉬움=4옥타브만, 보통=3또는5옥타브(4제외), 어려움=3~6옥타브
+    1: ('쉬움',   [4],            'desc_by_distance', '≥5반음/≥4반음차(오답 멀리)'),
+    2: ('보통',   [3, 5],         'shuffle',           '무작위 배치'),
+    3: ('어려움', [3, 4, 5, 6],   'asc_by_distance',  '≤2반음/≤1반음차(오답 가까이)'),
 }
 
 
@@ -407,10 +409,10 @@ def parse_pool(pool_str: str) -> list:
     return [normalize_note_name(n.strip()) for n in pool_str.split(',')]
 
 
-def pool_to_midi_range(pool: list, oct_min: int, oct_max: int) -> list:
+def pool_to_midi_range(pool: list, octaves: list) -> list:
     return sorted(
         note_to_midi(f'{name}{oct}')
-        for oct in range(oct_min, oct_max + 1)
+        for oct in octaves
         for name in pool
         if MIDI_MIN <= note_to_midi(f'{name}{oct}') <= MIDI_MAX
     )
@@ -446,10 +448,10 @@ def interval_to_midi_pair(root_midi: int, symbol: str, direction: str) -> tuple:
     return (root_midi, root_midi + st)
 
 
-def root_midi_pool(oct_min: int, oct_max: int) -> list:
+def root_midi_pool(octaves: list) -> list:
     return [
         note_to_midi(f'{n}{o}')
-        for o in range(oct_min, oct_max + 1)
+        for o in octaves
         for n in NOTE_NAMES
         if MIDI_MIN <= note_to_midi(f'{n}{o}') <= MIDI_MAX
     ]
@@ -469,22 +471,25 @@ class SingleNoteGenerator:
         d_rule  = self._get_difficulty_rule(difficulty_level)
 
         pool      = parse_pool(step['note_pool'])
-        midi_pool = pool_to_midi_range(pool, d_rule['oct_min'], d_rule['oct_max'])
+        midi_pool = pool_to_midi_range(pool, d_rule['octaves'])
         answer_midi = self._pick_answer(step_id, midi_pool)
         answer      = midi_to_note(answer_midi)
         answer_type = step['answer_type']
 
         if answer_type == 'same_diff':
-            present_notes, choices = self._build_same_diff(
-                answer_midi, pool, d_rule['oct_min'], d_rule['oct_max']
+            # present_notes: 제시된 두 음 / answer: '같음' 또는 '다름' / choices: ['같음','다름']
+            present_notes, same_diff_label = self._build_same_diff(
+                answer_midi, pool, d_rule['octaves']
             )
+            answer  = same_diff_label
+            choices = ['같음', '다름']
         elif answer_type == 'piano_subj':
             present_notes, choices = [answer], None
         else:
             present_notes = [answer]
             choices = self._build_choices(
                 answer_midi, pool,
-                d_rule['oct_min'], d_rule['oct_max'],
+                d_rule['octaves'],
                 at_rule['num_choices'],
                 at_rule['distractor_strategy'],
                 d_rule['proximity_strategy'],
@@ -514,42 +519,46 @@ class SingleNoteGenerator:
         return dict(zip(keys, ANSWER_TYPE_RULES[answer_type]))
 
     def _get_difficulty_rule(self, level: int) -> dict:
-        keys = ['label', 'oct_min', 'oct_max', 'proximity_strategy', 'proximity_semitones']
+        keys = ['label', 'octaves', 'proximity_strategy', 'proximity_semitones']
         return dict(zip(keys, DIFFICULTY_RULES[level]))
 
     def _pick_answer(self, step_id: str, midi_pool: list) -> int:
-        history    = self._session_history.get(step_id, [])
-        candidates = [m for m in midi_pool if m not in history]
+        # rules.md 3-4: 같은 정답 3회 연속 방지
+        history = self._session_history.get(step_id, [])
+        excluded = set()
+        if len(history) >= 2 and history[-1] == history[-2]:
+            excluded.add(history[-1])
+        candidates = [m for m in midi_pool if m not in excluded]
         if not candidates:
-            self._session_history[step_id] = []
             candidates = midi_pool
         return self.rng.choice(candidates)
 
-    def _build_same_diff(self, answer_midi, pool, oct_min, oct_max):
+    def _build_same_diff(self, answer_midi, pool, octaves):
         first   = midi_to_note(answer_midi)
         is_same = self.rng.choice([True, False])
         if is_same:
             second, label = first, '같음'
         else:
             answer_name = first[:-1]
+            # 두 번째 제시음: 다른 음이름 & 첫 번째 음 기준 1옥타브 이내 (12반음)
             others = [
-                m for m in pool_to_midi_range(pool, oct_min, oct_max)
+                m for m in pool_to_midi_range(pool, [3, 4, 5, 6])
                 if midi_to_note(m)[:-1] != answer_name
+                and abs(m - answer_midi) <= 12
             ]
             if not others:
                 second, label = first, '같음'
             else:
                 second, label = midi_to_note(self.rng.choice(others)), '다름'
-        return [first, second], [label]
+        return [first, second], label
 
-    def _build_choices(self, answer_midi, pool, oct_min, oct_max,
+    def _build_choices(self, answer_midi, pool, octaves,
                        num_choices, distractor_strategy, proximity_strategy):
         answer_name = midi_to_note(answer_midi)[:-1]
-        all_midi    = pool_to_midi_range(pool, oct_min, oct_max)
+        all_midi    = pool_to_midi_range(pool, octaves)
         candidates  = [
             m for m in all_midi
             if midi_to_note(m)[:-1] != answer_name
-            and semitone_distance(m, answer_midi) <= 11
         ]
         if len(pool) <= 2 or distractor_strategy == 'use_all':
             distractor_pool = candidates
@@ -599,7 +608,7 @@ class IntervalGenerator:
         ipool     = parse_interval_pool(step['note_pool'])
 
         root_midi, symbol = self._pick_root_and_interval(
-            step_id, ipool, d_rule['oct_min'], d_rule['oct_max'], direction
+            step_id, ipool, d_rule['octaves'], direction
         )
         root_note  = midi_to_note(root_midi)
         upper_midi = build_interval_midi(root_midi, symbol, direction)
@@ -607,19 +616,23 @@ class IntervalGenerator:
         answer_type = step['answer_type']
 
         if answer_type == 'same_diff':
-            present_notes, choices = self._build_same_diff(
+            # present_notes: 제시된 두 음정 쌍(4음) / answer: '같음'/'다름' / choices: ['같음','다름']
+            present_notes, same_diff_label = self._build_same_diff(
                 root_midi, symbol, ipool, d_rule, direction
             )
+            choices = ['같음', '다름']
         elif answer_type == 'height_compare':
             present_notes, choices = self._build_height_compare(
                 root_midi, symbol, d_rule, direction
             )
+            same_diff_label = None
         elif answer_type in ('interval_subj', 'keyboard_subj'):
             if direction == 'descending':
                 present_notes = [upper_note, root_note]
             else:
                 present_notes = [root_note, upper_note]
             choices = None
+            same_diff_label = None
         else:  # name_2/3/4choice
             if direction == 'descending':
                 present_notes = [upper_note, root_note]
@@ -628,10 +641,11 @@ class IntervalGenerator:
             choices = self._build_name_choices(
                 symbol, ipool, at_rule['num_choices'], d_rule['proximity_strategy']
             )
+            same_diff_label = None
 
         self._session_history.setdefault(step_id, []).append((root_midi, symbol))
 
-        return {
+        rec = {
             'step_id':            step_id,
             'step_name':          step['step_name'],
             'question_type':      'interval',
@@ -648,6 +662,9 @@ class IntervalGenerator:
             'choices':            choices,
             'total_difficulty':   float(difficulty_level),
         }
+        if same_diff_label is not None:
+            rec['answer'] = same_diff_label
+        return rec
 
     def reset_session(self):
         self._session_history = {}
@@ -657,55 +674,59 @@ class IntervalGenerator:
         return dict(zip(keys, ANSWER_TYPE_RULES[answer_type]))
 
     def _get_difficulty_rule(self, level):
-        keys = ['label', 'oct_min', 'oct_max', 'proximity_strategy', 'proximity_semitones']
+        keys = ['label', 'octaves', 'proximity_strategy', 'proximity_semitones']
         return dict(zip(keys, DIFFICULTY_RULES[level]))
 
-    def _pick_root_and_interval(self, step_id, ipool, oct_min, oct_max, direction):
+    def _pick_root_and_interval(self, step_id, ipool, octaves, direction):
+        # rules.md 3-4: 같은 정답(음정 종류) 3회 연속 방지
         history = self._session_history.get(step_id, [])
+        excluded_symbols = set()
+        if len(history) >= 2 and history[-1][1] == history[-2][1]:
+            excluded_symbols.add(history[-1][1])
         candidates = [
             (r, sym)
-            for r in root_midi_pool(oct_min, oct_max)
+            for r in root_midi_pool(octaves)
             for sym in ipool
-            if MIDI_MIN <= build_interval_midi(r, sym, direction) <= MIDI_MAX
-            and (r, sym) not in history
+            if sym not in excluded_symbols
+            and MIDI_MIN <= build_interval_midi(r, sym, direction) <= MIDI_MAX
         ]
         if not candidates:
-            self._session_history[step_id] = []
             candidates = [
                 (r, sym)
-                for r in root_midi_pool(oct_min, oct_max)
+                for r in root_midi_pool(octaves)
                 for sym in ipool
                 if MIDI_MIN <= build_interval_midi(r, sym, direction) <= MIDI_MAX
             ]
         return self.rng.choice(candidates)
 
     def _build_same_diff(self, root_midi, symbol, ipool, d_rule, direction):
+        # 두 음정은 항상 동일한 기준음(첫음)에서 출발한다.
+        # height_compare 와의 차이: same_diff = 같은 출발음, 음정 종류가 같은지 판별
         is_same = self.rng.choice([True, False])
         p1_low, p1_high = interval_to_midi_pair(root_midi, symbol, direction)
         if is_same:
             label = '같음'
             p2_low, p2_high = p1_low, p1_high
         else:
-            others = [s for s in ipool if s != symbol]
-            if not others:
+            # 같은 기준음, 다른 음정 종류
+            valid_others = [
+                s for s in ipool if s != symbol
+                and MIDI_MIN <= build_interval_midi(root_midi, s, direction) <= MIDI_MAX
+            ]
+            if not valid_others:
                 label = '같음'
                 p2_low, p2_high = p1_low, p1_high
             else:
-                alt = self.rng.choice(others)
-                alt_roots = [
-                    r for r in root_midi_pool(d_rule['oct_min'], d_rule['oct_max'])
-                    if MIDI_MIN <= build_interval_midi(r, alt, direction) <= MIDI_MAX
-                ]
-                alt_root = self.rng.choice(alt_roots) if alt_roots else root_midi
-                p2_low, p2_high = interval_to_midi_pair(alt_root, alt, direction)
+                alt = self.rng.choice(valid_others)
+                p2_low, p2_high = interval_to_midi_pair(root_midi, alt, direction)
                 label = '다름'
         present = [midi_to_note(p1_low), midi_to_note(p1_high),
                    midi_to_note(p2_low), midi_to_note(p2_high)]
-        return present, [label]
+        return present, label
 
     def _build_height_compare(self, root_midi, symbol, d_rule, direction):
         alt_roots = [
-            r for r in root_midi_pool(d_rule['oct_min'], d_rule['oct_max'])
+            r for r in root_midi_pool(d_rule['octaves'])
             if MIDI_MIN <= build_interval_midi(r, symbol, direction) <= MIDI_MAX
             and r != root_midi
         ]
@@ -825,6 +846,202 @@ def generate_batch(step_ids: list, amount: int, diff_mode: str,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 9-b. 전체 경우 생성 (--all)
+# ══════════════════════════════════════════════════════════════════════════════
+def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
+    """
+    step_ids 범위 내 등장 가능한 모든 문제를 빠짐없이 생성.
+
+    - single_note: 난이도 옥타브 범위 내 모든 MIDI 음을 answer로 순회
+      - same_diff → 음마다 '같음' / '다름' 2가지 생성
+      - piano_subj → 음마다 1문제
+      - name_Xchoice → 음마다 1문제 (distractors 결정론적 선택)
+    - interval: 유효한 모든 (root_midi, symbol) 쌍을 순회
+      - same_diff → 쌍마다 '같음' / '다름' 2가지 생성
+      - height_compare → 쌍마다 1문제 (다른 높이 1개)
+      - interval_subj / keyboard_subj → 쌍마다 1문제
+      - name_Xchoice → 쌍마다 1문제
+    """
+    rng     = random.Random(seed)
+    records = []
+
+    # 전체 경우: 난이도 무관하게 C3~C6 전체 옥타브 사용 (rules.md 1-1)
+    FULL_OCTAVES = [3, 4, 5, 6]
+
+    for sid in step_ids:
+        step         = STEP_LOOKUP[sid]
+        diff_level   = step['difficulty_level']
+        prox_strategy = DIFFICULTY_RULES[diff_level][2]   # octaves 다음 인덱스
+        answer_type  = step['answer_type']
+        at_vals      = ANSWER_TYPE_RULES[answer_type]
+        num_choices  = at_vals[1]
+        dist_strategy = at_vals[3]
+
+        base = {
+            'step_id':          sid,
+            'step_name':        step['step_name'],
+            'difficulty_level': diff_level,
+            'total_difficulty': float(diff_level),
+        }
+
+        if step['question_type'] == 'single_note':
+            pool      = parse_pool(step['note_pool'])
+            midi_pool = pool_to_midi_range(pool, FULL_OCTAVES)
+
+            for answer_midi in midi_pool:
+                answer      = midi_to_note(answer_midi)
+                answer_name = answer[:-1]
+
+                if answer_type == 'same_diff':
+                    # 같음: answer='같음', choices=['같음','다름'], present=[음,음]
+                    records.append({**base,
+                        'question_type': 'single_note', 'answer_type': answer_type,
+                        'direction': '-', 'answer': '같음', 'answer_midi': answer_midi,
+                        'present_notes': [answer, answer], 'choices': ['같음', '다름'],
+                    })
+                    # 다름: 다른 음이름 & 첫 번째 음 기준 1옥타브 이내 모든 조합
+                    all_second = pool_to_midi_range(pool, FULL_OCTAVES)
+                    for second_midi in all_second:
+                        if midi_to_note(second_midi)[:-1] != answer_name and abs(second_midi - answer_midi) <= 12:
+                            records.append({**base,
+                                'question_type': 'single_note', 'answer_type': answer_type,
+                                'direction': '-', 'answer': '다름', 'answer_midi': answer_midi,
+                                'present_notes': [answer, midi_to_note(second_midi)],
+                                'choices': ['같음', '다름'],
+                            })
+
+                elif answer_type == 'piano_subj':
+                    records.append({**base,
+                        'question_type': 'single_note', 'answer_type': answer_type,
+                        'direction': '-', 'answer': answer, 'answer_midi': answer_midi,
+                        'present_notes': [answer], 'choices': None,
+                    })
+
+                else:  # name_2/3/4choice — 오답은 풀 내부에서만 (rules.md 3-1)
+                    candidates = [
+                        m for m in midi_pool
+                        if midi_to_note(m)[:-1] != answer_name
+                    ]
+                    if len(pool) <= 2 or dist_strategy == 'use_all':
+                        distractor_pool = candidates
+                    elif prox_strategy == 'asc_by_distance':
+                        distractor_pool = sorted(candidates,
+                                                 key=lambda m: semitone_distance(m, answer_midi))
+                    elif prox_strategy == 'desc_by_distance':
+                        distractor_pool = sorted(candidates,
+                                                 key=lambda m: semitone_distance(m, answer_midi),
+                                                 reverse=True)
+                    else:
+                        distractor_pool = candidates[:]
+                        rng.shuffle(distractor_pool)
+
+                    seen, distractors = set(), []
+                    for m in distractor_pool:
+                        nm = midi_to_note(m)[:-1]
+                        if nm not in seen:
+                            seen.add(nm)
+                            distractors.append(m)
+                        if len(distractors) == num_choices - 1:
+                            break
+                    choices = [answer] + [midi_to_note(d) for d in distractors]
+                    rng.shuffle(choices)
+                    records.append({**base,
+                        'question_type': 'single_note', 'answer_type': answer_type,
+                        'direction': '-', 'answer': answer, 'answer_midi': answer_midi,
+                        'present_notes': [answer], 'choices': choices,
+                    })
+
+        else:  # interval
+            ipool     = parse_interval_pool(step['note_pool'])
+            direction = step['direction']
+            # 난이도 무관: C3~C6 전체에서 유효한 모든 (기준음, 음정) 쌍 열거
+            all_pairs = [
+                (r, sym)
+                for r in root_midi_pool(FULL_OCTAVES)
+                for sym in ipool
+                if MIDI_MIN <= build_interval_midi(r, sym, direction) <= MIDI_MAX
+            ]
+
+            for root_midi, symbol in all_pairs:
+                root_note    = midi_to_note(root_midi)
+                upper_midi   = build_interval_midi(root_midi, symbol, direction)
+                upper_note   = midi_to_note(upper_midi)
+                present_base = ([upper_note, root_note] if direction == 'descending'
+                                else [root_note, upper_note])
+                int_base = {**base,
+                    'question_type':      'interval',
+                    'answer_type':        answer_type,
+                    'direction':          direction,
+                    'answer_interval':    symbol,
+                    'answer_interval_ko': interval_name_ko(symbol),
+                    'root_midi':          root_midi,
+                    'root_note':          root_note,
+                    'upper_midi':         upper_midi,
+                    'upper_note':         upper_note,
+                }
+
+                if answer_type == 'same_diff':
+                    # 같음: answer='같음', choices=['같음','다름'], 같은 음정 쌍 두 번 제시
+                    p1l, p1h = interval_to_midi_pair(root_midi, symbol, direction)
+                    records.append({**int_base,
+                        'answer': '같음',
+                        'present_notes': [midi_to_note(p1l), midi_to_note(p1h),
+                                          midi_to_note(p1l), midi_to_note(p1h)],
+                        'choices': ['같음', '다름'],
+                    })
+                    # 다름: 같은 기준음, 다른 음정 종류 (첫음이 동일해야 함)
+                    for alt in [s for s in ipool if s != symbol]:
+                        if MIDI_MIN <= build_interval_midi(root_midi, alt, direction) <= MIDI_MAX:
+                            p2l, p2h = interval_to_midi_pair(root_midi, alt, direction)
+                            records.append({**int_base,
+                                'answer': '다름',
+                                'present_notes': [midi_to_note(p1l), midi_to_note(p1h),
+                                                  midi_to_note(p2l), midi_to_note(p2h)],
+                                'choices': ['같음', '다름'],
+                            })
+
+                elif answer_type == 'height_compare':
+                    # 같은 음정을 다른 높이에서 제시 — 모든 유효 alt_root와 조합
+                    p1l, p1h = interval_to_midi_pair(root_midi, symbol, direction)
+                    alt_roots = sorted(
+                        r for r in root_midi_pool(FULL_OCTAVES)
+                        if MIDI_MIN <= build_interval_midi(r, symbol, direction) <= MIDI_MAX
+                        and r != root_midi
+                    )
+                    for alt_root in alt_roots:
+                        p2l, p2h = interval_to_midi_pair(alt_root, symbol, direction)
+                        records.append({**int_base,
+                            'present_notes': [midi_to_note(p1l), midi_to_note(p1h),
+                                              midi_to_note(p2l), midi_to_note(p2h)],
+                            'choices': ['같음'],
+                        })
+
+                elif answer_type in ('interval_subj', 'keyboard_subj'):
+                    records.append({**int_base,
+                        'present_notes': present_base, 'choices': None,
+                    })
+
+                else:  # name_2/3/4choice — 오답은 풀 내부에서만 (rules.md 3-1)
+                    target_st = interval_semitones(symbol)
+                    pool_syms = [s for s in ipool if s != symbol]
+                    if prox_strategy == 'asc_by_distance':
+                        pool_syms.sort(key=lambda s: abs(interval_semitones(s) - target_st))
+                    elif prox_strategy == 'desc_by_distance':
+                        pool_syms.sort(key=lambda s: abs(interval_semitones(s) - target_st),
+                                       reverse=True)
+                    else:
+                        rng.shuffle(pool_syms)
+                    distractors = pool_syms[:num_choices - 1]
+                    choices = [interval_name_ko(symbol)] + [interval_name_ko(s) for s in distractors]
+                    rng.shuffle(choices)
+                    records.append({**int_base,
+                        'present_notes': present_base, 'choices': choices,
+                    })
+
+    return records
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # 10. 레코드 → 출력용 행 변환
 # ══════════════════════════════════════════════════════════════════════════════
 def record_to_row(q: dict, range_label: str) -> dict:
@@ -833,7 +1050,9 @@ def record_to_row(q: dict, range_label: str) -> dict:
     sep = ' + ' if direction == 'harmonic' else ' → '
     present_str = sep.join(q['present_notes'])
 
-    if q['question_type'] == 'interval':
+    if q.get('answer_type') == 'same_diff':
+        answer_str = q.get('answer', '?')   # '같음' 또는 '다름'
+    elif q['question_type'] == 'interval':
         answer_str = f"{q['answer_interval']} ({q['answer_interval_ko']})"
     else:
         answer_str = q['answer']
@@ -987,6 +1206,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest='output', default='example/', metavar='PATH',
         help='저장 경로 (기본값: example/)'
     )
+    parser.add_argument(
+        '--all', '-A',
+        dest='all_questions', action='store_true',
+        help='범위 내 등장 가능한 모든 문제 생성 (--amount 무시)'
+    )
     return parser
 
 
@@ -1045,14 +1269,19 @@ def main():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     for range_label, step_ids in ranges:
-        print(f'\n생성 중: [{range_label}] {args.amount}문제 ...')
-        batch = generate_batch(
-            step_ids=step_ids,
-            amount=args.amount,
-            diff_mode=diff_mode,
-            fixed_level=fixed_level,
-            seed=args.seed,
-        )
+        if args.all_questions:
+            print(f'\n생성 중: [{range_label}] 전체 경우 (--all) ...')
+            batch = generate_all_exhaustive(step_ids=step_ids, seed=args.seed)
+            print(f'  → {len(batch)}개 문제 산출')
+        else:
+            print(f'\n생성 중: [{range_label}] {args.amount}문제 ...')
+            batch = generate_batch(
+                step_ids=step_ids,
+                amount=args.amount,
+                diff_mode=diff_mode,
+                fixed_level=fixed_level,
+                seed=args.seed,
+            )
         for q in batch:
             q_counter += 1
             q['q_num'] = q_counter
