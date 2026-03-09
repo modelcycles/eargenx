@@ -622,10 +622,10 @@ class IntervalGenerator:
             )
             choices = ['같음', '다름']
         elif answer_type == 'height_compare':
-            present_notes, choices = self._build_height_compare(
-                root_midi, symbol, d_rule, direction
+            present_notes, same_diff_label = self._build_height_compare(
+                root_midi, symbol, ipool, d_rule, direction
             )
-            same_diff_label = None
+            choices = ['같음', '다름']
         elif answer_type in ('interval_subj', 'keyboard_subj'):
             if direction == 'descending':
                 present_notes = [upper_note, root_note]
@@ -724,18 +724,39 @@ class IntervalGenerator:
                    midi_to_note(p2_low), midi_to_note(p2_high)]
         return present, label
 
-    def _build_height_compare(self, root_midi, symbol, d_rule, direction):
+    def _build_height_compare(self, root_midi, symbol, ipool, d_rule, direction):
+        is_same = self.rng.choice([True, False])
+        p1_low, p1_high = interval_to_midi_pair(root_midi, symbol, direction)
         alt_roots = [
             r for r in root_midi_pool(d_rule['octaves'])
             if MIDI_MIN <= build_interval_midi(r, symbol, direction) <= MIDI_MAX
             and r != root_midi
         ]
-        alt_root = self.rng.choice(alt_roots) if alt_roots else root_midi
-        p1_low, p1_high = interval_to_midi_pair(root_midi, symbol, direction)
-        p2_low, p2_high = interval_to_midi_pair(alt_root,  symbol, direction)
+        if is_same:
+            label = '같음'
+            alt_root = self.rng.choice(alt_roots) if alt_roots else root_midi
+            p2_low, p2_high = interval_to_midi_pair(alt_root, symbol, direction)
+        else:
+            valid_others = [
+                s for s in ipool if s != symbol
+                and MIDI_MIN <= build_interval_midi(root_midi, s, direction) <= MIDI_MAX
+            ]
+            if not valid_others:
+                label = '같음'
+                alt_root = self.rng.choice(alt_roots) if alt_roots else root_midi
+                p2_low, p2_high = interval_to_midi_pair(alt_root, symbol, direction)
+            else:
+                label = '다름'
+                alt_sym = self.rng.choice(valid_others)
+                alt_roots_other = [
+                    r for r in root_midi_pool(d_rule['octaves'])
+                    if MIDI_MIN <= build_interval_midi(r, alt_sym, direction) <= MIDI_MAX
+                ]
+                alt_root = self.rng.choice(alt_roots_other) if alt_roots_other else root_midi
+                p2_low, p2_high = interval_to_midi_pair(alt_root, alt_sym, direction)
         present = [midi_to_note(p1_low), midi_to_note(p1_high),
                    midi_to_note(p2_low), midi_to_note(p2_high)]
-        return present, ['같음']
+        return present, label
 
     def _build_name_choices(self, symbol, ipool, num_choices, proximity_strategy):
         target_st = interval_semitones(symbol)
@@ -1001,7 +1022,7 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                             })
 
                 elif answer_type == 'height_compare':
-                    # 같은 음정을 다른 높이에서 제시 — 모든 유효 alt_root와 조합
+                    # 같음: 같은 음정을 다른 높이에서 제시
                     p1l, p1h = interval_to_midi_pair(root_midi, symbol, direction)
                     alt_roots = sorted(
                         r for r in root_midi_pool(FULL_OCTAVES)
@@ -1011,10 +1032,21 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                     for alt_root in alt_roots:
                         p2l, p2h = interval_to_midi_pair(alt_root, symbol, direction)
                         records.append({**int_base,
+                            'answer': '같음',
                             'present_notes': [midi_to_note(p1l), midi_to_note(p1h),
                                               midi_to_note(p2l), midi_to_note(p2h)],
-                            'choices': ['같음'],
+                            'choices': ['같음', '다름'],
                         })
+                    # 다름: 다른 높이에서 다른 음정 제시
+                    for alt in [s for s in ipool if s != symbol]:
+                        if MIDI_MIN <= build_interval_midi(root_midi, alt, direction) <= MIDI_MAX:
+                            p2l, p2h = interval_to_midi_pair(root_midi, alt, direction)
+                            records.append({**int_base,
+                                'answer': '다름',
+                                'present_notes': [midi_to_note(p1l), midi_to_note(p1h),
+                                                  midi_to_note(p2l), midi_to_note(p2h)],
+                                'choices': ['같음', '다름'],
+                            })
 
                 elif answer_type in ('interval_subj', 'keyboard_subj'):
                     records.append({**int_base,
@@ -1050,7 +1082,7 @@ def record_to_row(q: dict, range_label: str) -> dict:
     sep = ' + ' if direction == 'harmonic' else ' → '
     present_str = sep.join(q['present_notes'])
 
-    if q.get('answer_type') == 'same_diff':
+    if q.get('answer_type') in ('same_diff', 'height_compare'):
         answer_str = q.get('answer', '?')   # '같음' 또는 '다름'
     elif q['question_type'] == 'interval':
         answer_str = f"{q['answer_interval']} ({q['answer_interval_ko']})"
