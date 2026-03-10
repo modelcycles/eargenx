@@ -1,6 +1,6 @@
 # EarGenX
 
-EarGenX(eargenx.py)는 **청음 문제 더미데이터 생성기**입니다.
+EarGenX(eargenx.py)는 **청음 문제 데이터 생성기**입니다.
 음악 교육 플랫폼 Golden Ear에서서 사용하는 청음 연습 문제를 커리큘럼 계층 구조에 따라 자동으로 생성합니다.
 
 ---
