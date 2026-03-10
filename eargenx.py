@@ -751,6 +751,7 @@ class IntervalGenerator:
                 alt_roots_other = [
                     r for r in root_midi_pool(d_rule['octaves'])
                     if MIDI_MIN <= build_interval_midi(r, alt_sym, direction) <= MIDI_MAX
+                    and r != root_midi
                 ]
                 alt_root = self.rng.choice(alt_roots_other) if alt_roots_other else root_midi
                 p2_low, p2_high = interval_to_midi_pair(alt_root, alt_sym, direction)
@@ -1037,10 +1038,14 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                                               midi_to_note(p2l), midi_to_note(p2h)],
                             'choices': ['같음', '다름'],
                         })
-                    # 다름: 다른 높이에서 다른 음정 제시
-                    for alt in [s for s in ipool if s != symbol]:
-                        if MIDI_MIN <= build_interval_midi(root_midi, alt, direction) <= MIDI_MAX:
-                            p2l, p2h = interval_to_midi_pair(root_midi, alt, direction)
+                    # 다름: 다른 높이(다른 기준음)에서 다른 음정 제시
+                    for alt_sym in [s for s in ipool if s != symbol]:
+                        for alt_root in sorted(
+                            r for r in root_midi_pool(FULL_OCTAVES)
+                            if MIDI_MIN <= build_interval_midi(r, alt_sym, direction) <= MIDI_MAX
+                            and r != root_midi
+                        ):
+                            p2l, p2h = interval_to_midi_pair(alt_root, alt_sym, direction)
                             records.append({**int_base,
                                 'answer': '다름',
                                 'present_notes': [midi_to_note(p1l), midi_to_note(p1h),
@@ -1080,7 +1085,11 @@ def record_to_row(q: dict, range_label: str) -> dict:
     """문제 dict → 출력 테이블 행 dict"""
     direction  = q.get('direction', '-')
     sep = ' + ' if direction == 'harmonic' else ' → '
-    present_str = sep.join(q['present_notes'])
+    notes = q['present_notes']
+    if len(notes) == 4:
+        present_str = sep.join(notes[:2]) + ' | ' + sep.join(notes[2:])
+    else:
+        present_str = sep.join(notes)
 
     if q.get('answer_type') in ('same_diff', 'height_compare'):
         answer_str = q.get('answer', '?')   # '같음' 또는 '다름'
