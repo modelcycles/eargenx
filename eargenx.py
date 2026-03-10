@@ -1091,7 +1091,13 @@ def record_to_row(q: dict, range_label: str) -> dict:
     else:
         present_str = sep.join(notes)
 
-    if q.get('answer_type') in ('same_diff', 'height_compare'):
+    if q.get('answer_type') == 'keyboard_subj':
+        # 제시: 기준음 | 음정이름, 정답: 목표음
+        given_note  = q['root_note'] if direction != 'descending' else q['upper_note']
+        target_note = q['upper_note'] if direction != 'descending' else q['root_note']
+        present_str = f"{given_note} | {q['answer_interval']} ({q['answer_interval_ko']})"
+        answer_str  = target_note
+    elif q.get('answer_type') in ('same_diff', 'height_compare'):
         answer_str = q.get('answer', '?')   # '같음' 또는 '다름'
     elif q['question_type'] == 'interval':
         answer_str = f"{q['answer_interval']} ({q['answer_interval_ko']})"
