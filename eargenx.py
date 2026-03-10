@@ -339,6 +339,27 @@ CURRICULUM_COLS = ['part_id', 'step_id', 'step_name', 'question_type',
 STEP_LOOKUP: dict = {r[1]: dict(zip(CURRICULUM_COLS, r)) for r in CURRICULUM_DATA}
 ALL_STEP_IDS: list = [r[1] for r in CURRICULUM_DATA]
 
+# CAT_INT 전체복습 파트 → 누적 step_id 리스트 매핑
+_int_review_part_ids = [
+    row[1]
+    for row in PART_DATA
+    if row[0].startswith('CAT_INT') and '전체복습' in row[2]
+]
+# → ['CAT_INT_SC01_P03', 'CAT_INT_SC02_P04', ..., 'CAT_INT_SC06_P04']
+
+INT_REVIEW_EXPANSION: dict = {}
+_cumulative: list = []
+for _i, _pid in enumerate(_int_review_part_ids):
+    if _i == 0:
+        # 첫 번째 복습: 해당 코스 전체 (prefix = CAT_INT_SC01)
+        _course_prefix = _pid.rsplit('_P', 1)[0]  # 'CAT_INT_SC01_P03' → 'CAT_INT_SC01'
+        _cumulative = [sid for sid in ALL_STEP_IDS if sid.startswith(_course_prefix + '_')]
+    else:
+        # 이후 복습: 이전 누적 + 현재 파트 스텝
+        _part_steps = [sid for sid in ALL_STEP_IDS if sid.startswith(_pid + '_')]
+        _cumulative = _cumulative + _part_steps
+    INT_REVIEW_EXPANSION[_pid] = list(_cumulative)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. Answer Type & Difficulty 규칙
@@ -457,6 +478,11 @@ def root_midi_pool(octaves: list) -> list:
     ]
 
 
+def octave_difficulty(ref_midi: int) -> float:
+    """C4(MIDI 60) 기준 옥타브 거리로 total_difficulty 계산 (1.0 ~ 3.0)"""
+    return 1.0 + abs(ref_midi // 12 - 60 // 12)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 5. SingleNoteGenerator
 # ══════════════════════════════════════════════════════════════════════════════
@@ -508,7 +534,7 @@ class SingleNoteGenerator:
             'answer_midi':      answer_midi,
             'present_notes':    present_notes,
             'choices':          choices,
-            'total_difficulty': float(difficulty_level),
+            'total_difficulty': octave_difficulty(answer_midi),
         }
 
     def reset_session(self):
@@ -657,7 +683,7 @@ class IntervalGenerator:
             'upper_note':         upper_note,
             'present_notes':      present_notes,
             'choices':            choices,
-            'total_difficulty':   float(difficulty_level),
+            'total_difficulty':   octave_difficulty(root_midi),
         }
         if same_diff_label is not None:
             rec['answer'] = same_diff_label
@@ -820,6 +846,10 @@ def resolve_range(range_str: str) -> list:
     if range_str in STEP_LOOKUP:
         return [range_str]
 
+    # CAT_INT 전체복습 파트 누적 확장
+    if range_str in INT_REVIEW_EXPANSION:
+        return INT_REVIEW_EXPANSION[range_str]
+
     # 접두사로 필터
     prefix = range_str if range_str.endswith('_') else range_str + '_'
     matched = [sid for sid in ALL_STEP_IDS if sid.startswith(prefix)]
@@ -917,6 +947,7 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                         'question_type': 'single_note', 'answer_type': answer_type,
                         'direction': '-', 'answer': '같음', 'answer_midi': answer_midi,
                         'present_notes': [answer, answer], 'choices': ['같음', '다름'],
+                        'total_difficulty': octave_difficulty(answer_midi),
                     })
                     # 다름: 다른 음이름 & 첫 번째 음 기준 1옥타브 이내 모든 조합
                     all_second = pool_to_midi_range(pool, FULL_OCTAVES)
@@ -927,6 +958,7 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                                 'direction': '-', 'answer': '다름', 'answer_midi': answer_midi,
                                 'present_notes': [answer, midi_to_note(second_midi)],
                                 'choices': ['같음', '다름'],
+                                'total_difficulty': octave_difficulty(answer_midi),
                             })
 
                 elif answer_type == 'piano_subj':
@@ -934,6 +966,7 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                         'question_type': 'single_note', 'answer_type': answer_type,
                         'direction': '-', 'answer': answer, 'answer_midi': answer_midi,
                         'present_notes': [answer], 'choices': None,
+                        'total_difficulty': octave_difficulty(answer_midi),
                     })
 
                 else:  # name_2/3/4choice — 오답은 풀 내부에서만 (rules.md 3-1)
@@ -968,6 +1001,7 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                         'question_type': 'single_note', 'answer_type': answer_type,
                         'direction': '-', 'answer': answer, 'answer_midi': answer_midi,
                         'present_notes': [answer], 'choices': choices,
+                        'total_difficulty': octave_difficulty(answer_midi),
                     })
 
         else:  # interval
@@ -996,6 +1030,7 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                     'root_note':          root_note,
                     'upper_midi':         upper_midi,
                     'upper_note':         upper_note,
+                    'total_difficulty':   octave_difficulty(root_midi),
                 }
 
                 if answer_type == 'same_diff':
