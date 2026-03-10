@@ -627,10 +627,7 @@ class IntervalGenerator:
             )
             choices = ['같음', '다름']
         elif answer_type in ('interval_subj', 'keyboard_subj'):
-            if direction == 'descending':
-                present_notes = [upper_note, root_note]
-            else:
-                present_notes = [root_note, upper_note]
+            present_notes = [root_note, upper_note]
             choices = None
             same_diff_label = None
         else:  # name_2/3/4choice
