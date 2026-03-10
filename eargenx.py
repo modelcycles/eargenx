@@ -1097,6 +1097,8 @@ def record_to_row(q: dict, range_label: str) -> dict:
         target_note = q['upper_note'] if direction != 'descending' else q['root_note']
         present_str = f"{given_note} | {q['answer_interval']} ({q['answer_interval_ko']})"
         answer_str  = target_note
+    elif q.get('answer_type') == 'interval_subj':
+        answer_str = present_str  # 음정을 구성하는 음 이름 (예: G#4 → C5)
     elif q.get('answer_type') in ('same_diff', 'height_compare'):
         answer_str = q.get('answer', '?')   # '같음' 또는 '다름'
     elif q['question_type'] == 'interval':
