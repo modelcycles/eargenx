@@ -1,4 +1,3 @@
 .venv/
 example/
-**/CLAUDE.md
 __pycache__/
