@@ -985,8 +985,7 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                 root_note    = midi_to_note(root_midi)
                 upper_midi   = build_interval_midi(root_midi, symbol, direction)
                 upper_note   = midi_to_note(upper_midi)
-                present_base = ([upper_note, root_note] if direction == 'descending'
-                                else [root_note, upper_note])
+                present_base = [root_note, upper_note]
                 int_base = {**base,
                     'question_type':      'interval',
                     'answer_type':        answer_type,
