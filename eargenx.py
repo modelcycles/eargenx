@@ -250,6 +250,53 @@ class SingleNoteGenerator:
         return result
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# IntervalGenerator 케이스 열거 헬퍼
+# 랜덤 생성(IntervalGenerator)과 전체 열거(generate_all_exhaustive) 양쪽에서 공유.
+# 규칙 변경 시 이 함수만 수정하면 됩니다.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _same_diff_cases(symbol: str, ipool: list, direction: str) -> list:
+    """5-3 같음/다름: 루트를 C4(60)으로 고정하고 가능한 모든 (present_notes, label) 반환."""
+    root = 60  # 항상 C4
+    p1l, p1h = interval_to_midi_pair(root, symbol, direction)
+    p1_notes = [midi_to_note(p1l), midi_to_note(p1h)]
+    cases = [(p1_notes + p1_notes, '같음')]
+    for alt in ipool:
+        if alt != symbol and MIDI_MIN <= build_interval_midi(root, alt, direction) <= MIDI_MAX:
+            p2l, p2h = interval_to_midi_pair(root, alt, direction)
+            cases.append((p1_notes + [midi_to_note(p2l), midi_to_note(p2h)], '다름'))
+    return cases
+
+
+def _height_compare_cases(root_midi: int, symbol: str, ipool: list, direction: str) -> list:
+    """5-4 다양한 높이 비교: root_fixed/top_fixed 모든 (present_notes, label) 반환."""
+    p1l, p1h = interval_to_midi_pair(root_midi, symbol, direction)
+    p1_notes = [midi_to_note(p1l), midi_to_note(p1h)]
+    top_midi = p1h  # 높은 음 (ascending: root+st, descending: root)
+
+    cases = [(p1_notes + p1_notes, '같음')]  # root_fixed/top_fixed 같음 (동일)
+
+    # root_fixed 다름: 같은 루트, 다른 심볼
+    for alt in ipool:
+        if alt != symbol and MIDI_MIN <= build_interval_midi(root_midi, alt, direction) <= MIDI_MAX:
+            p2l, p2h = interval_to_midi_pair(root_midi, alt, direction)
+            cases.append((p1_notes + [midi_to_note(p2l), midi_to_note(p2h)], '다름'))
+
+    # top_fixed 다름: 같은 상단음, 다른 심볼 (루트가 달라짐)
+    for alt in ipool:
+        if alt != symbol:
+            if direction == 'ascending':
+                alt_root = top_midi - interval_semitones(alt)
+            else:  # descending: 루트가 곧 상단음
+                alt_root = top_midi
+            if MIDI_MIN <= alt_root <= MIDI_MAX and alt_root != root_midi:
+                p2l, p2h = interval_to_midi_pair(alt_root, alt, direction)
+                cases.append((p1_notes + [midi_to_note(p2l), midi_to_note(p2h)], '다름'))
+
+    return cases
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. IntervalGenerator
 # ══════════════════════════════════════════════════════════════════════════════
@@ -353,78 +400,11 @@ class IntervalGenerator:
         return self.rng.choice(candidates)
 
     def _build_same_diff(self, root_midi, symbol, ipool, d_rule, direction):
-        root_midi = 60  # 5-3 규칙: 항상 C4 고정
-        is_same = self.rng.choice([True, False])
-        p1_low, p1_high = interval_to_midi_pair(root_midi, symbol, direction)
-        if is_same:
-            label = '같음'
-            p2_low, p2_high = p1_low, p1_high
-        else:
-            valid_others = [
-                s for s in ipool if s != symbol
-                and MIDI_MIN <= build_interval_midi(root_midi, s, direction) <= MIDI_MAX
-            ]
-            if not valid_others:
-                label = '같음'
-                p2_low, p2_high = p1_low, p1_high
-            else:
-                alt = self.rng.choice(valid_others)
-                p2_low, p2_high = interval_to_midi_pair(root_midi, alt, direction)
-                label = '다름'
-        present = [midi_to_note(p1_low), midi_to_note(p1_high),
-                   midi_to_note(p2_low), midi_to_note(p2_high)]
+        present, label = self.rng.choice(_same_diff_cases(symbol, ipool, direction))
         return present, label
 
     def _build_height_compare(self, root_midi, symbol, ipool, d_rule, direction):
-        mode = self.rng.choice(['root_fixed', 'top_fixed'])
-        is_same = self.rng.choice([True, False])
-        p1_low, p1_high = interval_to_midi_pair(root_midi, symbol, direction)
-
-        if mode == 'root_fixed':
-            # 두 음정이 같은 루트를 공유
-            if is_same:
-                label = '같음'
-                p2_low, p2_high = p1_low, p1_high
-            else:
-                valid_others = [
-                    s for s in ipool if s != symbol
-                    and MIDI_MIN <= build_interval_midi(root_midi, s, direction) <= MIDI_MAX
-                ]
-                if not valid_others:
-                    label = '같음'
-                    p2_low, p2_high = p1_low, p1_high
-                else:
-                    alt = self.rng.choice(valid_others)
-                    p2_low, p2_high = interval_to_midi_pair(root_midi, alt, direction)
-                    label = '다름'
-        else:  # top_fixed
-            # 두 음정이 같은 상단음(탑)을 공유
-            # p1_high는 ascending/descending 모두에서 높은 음
-            top_midi = p1_high
-            if is_same:
-                label = '같음'
-                p2_low, p2_high = p1_low, p1_high
-            else:
-                # 탑이 같으려면: ascending → alt_root = top_midi - semitones(alt)
-                #                descending → alt_root = top_midi (루트가 곧 탑)
-                valid_others = [
-                    s for s in ipool if s != symbol
-                    and MIDI_MIN <= top_midi - interval_semitones(s) <= MIDI_MAX
-                ]
-                if not valid_others:
-                    label = '같음'
-                    p2_low, p2_high = p1_low, p1_high
-                else:
-                    alt = self.rng.choice(valid_others)
-                    if direction == 'ascending':
-                        alt_root = top_midi - interval_semitones(alt)
-                    else:  # descending: 루트가 높은 음이므로 alt_root = top_midi
-                        alt_root = top_midi
-                    p2_low, p2_high = interval_to_midi_pair(alt_root, alt, direction)
-                    label = '다름'
-
-        present = [midi_to_note(p1_low), midi_to_note(p1_high),
-                   midi_to_note(p2_low), midi_to_note(p2_high)]
+        present, label = self.rng.choice(_height_compare_cases(root_midi, symbol, ipool, direction))
         return present, label
 
     def _build_name_choices(self, symbol, ipool, num_choices, proximity_strategy):
@@ -633,63 +613,21 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                 }
 
                 if answer_type == 'same_diff':
-                    # 5-3 규칙: 루트는 항상 C4(60)만 처리
+                    # 5-3 규칙: C4 기준으로 생성 — root_midi가 60일 때만 처리해 중복 방지
                     if root_midi != 60:
                         continue
-                    p1l, p1h = interval_to_midi_pair(60, symbol, direction)
-                    records.append({**int_base,
-                        'answer': '같음',
-                        'present_notes': [midi_to_note(p1l), midi_to_note(p1h),
-                                          midi_to_note(p1l), midi_to_note(p1h)],
-                        'choices': ['같음', '다름'],
-                    })
-                    for alt in [s for s in ipool if s != symbol]:
-                        if MIDI_MIN <= build_interval_midi(60, alt, direction) <= MIDI_MAX:
-                            p2l, p2h = interval_to_midi_pair(60, alt, direction)
-                            records.append({**int_base,
-                                'answer': '다름',
-                                'present_notes': [midi_to_note(p1l), midi_to_note(p1h),
-                                                  midi_to_note(p2l), midi_to_note(p2h)],
-                                'choices': ['같음', '다름'],
-                            })
+                    for present_notes, answer in _same_diff_cases(symbol, ipool, direction):
+                        records.append({**int_base,
+                            'answer': answer, 'present_notes': present_notes,
+                            'choices': ['같음', '다름'],
+                        })
 
                 elif answer_type == 'height_compare':
-                    p1l, p1h = interval_to_midi_pair(root_midi, symbol, direction)
-                    top_midi = p1h  # 높은 음 (ascending: root+st, descending: root)
-
-                    # root_fixed 같음: 같은 루트, 같은 심볼
-                    records.append({**int_base,
-                        'answer': '같음',
-                        'present_notes': [midi_to_note(p1l), midi_to_note(p1h),
-                                          midi_to_note(p1l), midi_to_note(p1h)],
-                        'choices': ['같음', '다름'],
-                    })
-                    # root_fixed 다름: 같은 루트, 다른 심볼
-                    for alt in [s for s in ipool if s != symbol]:
-                        if MIDI_MIN <= build_interval_midi(root_midi, alt, direction) <= MIDI_MAX:
-                            p2l, p2h = interval_to_midi_pair(root_midi, alt, direction)
-                            records.append({**int_base,
-                                'answer': '다름',
-                                'present_notes': [midi_to_note(p1l), midi_to_note(p1h),
-                                                  midi_to_note(p2l), midi_to_note(p2h)],
-                                'choices': ['같음', '다름'],
-                            })
-                    # top_fixed 다름: 같은 상단음, 다른 심볼 (루트가 달라짐)
-                    for alt in [s for s in ipool if s != symbol]:
-                        alt_st = interval_semitones(alt)
-                        if MIDI_MIN <= top_midi - alt_st <= MIDI_MAX:
-                            if direction == 'ascending':
-                                alt_root = top_midi - alt_st
-                            else:  # descending: 루트가 곧 상단음
-                                alt_root = top_midi
-                            if alt_root != root_midi:
-                                p2l, p2h = interval_to_midi_pair(alt_root, alt, direction)
-                                records.append({**int_base,
-                                    'answer': '다름',
-                                    'present_notes': [midi_to_note(p1l), midi_to_note(p1h),
-                                                      midi_to_note(p2l), midi_to_note(p2h)],
-                                    'choices': ['같음', '다름'],
-                                })
+                    for present_notes, answer in _height_compare_cases(root_midi, symbol, ipool, direction):
+                        records.append({**int_base,
+                            'answer': answer, 'present_notes': present_notes,
+                            'choices': ['같음', '다름'],
+                        })
 
                 elif answer_type in ('interval_subj', 'keyboard_subj'):
                     records.append({**int_base,
