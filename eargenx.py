@@ -22,8 +22,15 @@ import os
 import random
 import sys
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
+
+from config import MIDI_MIN, MIDI_MAX, DEFAULT_AMOUNT, DEFAULT_OUTPUT, DEFAULT_DIFFICULTY, DEFAULT_FORMATS
+from curriculum import (
+    NOTE_NAMES, ENHARMONIC_MAP, INTERVAL_SEMITONES,
+    ANSWER_TYPE_RULES, DIFFICULTY_RULES,
+    CATEGORY_DATA, STEP_LOOKUP, ALL_STEP_IDS,
+    INT_REVIEW_EXPANSION, VALID_CATEGORY_PREFIXES,
+)
 
 # ── 선택적 패키지 ────────────────────────────────────────────────────────────
 try:
@@ -40,377 +47,8 @@ except ImportError:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 1. 시스템 상수
+# 1. 음 유틸 (MIDI ↔ 음이름 변환)
 # ══════════════════════════════════════════════════════════════════════════════
-MIDI_MIN = 48   # C3
-MIDI_MAX = 84   # C6
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 2. 커리큘럼 데이터 (ear_training_v4.ipynb 기반)
-# ══════════════════════════════════════════════════════════════════════════════
-CATEGORY_DATA = [
-    ('CAT_SN',  '단일음'),
-    ('CAT_INT', '음정'),
-]
-
-COURSE_DATA = [
-    # category_id,  course_id,           course_name
-    ('CAT_SN',  'CAT_SN_SC01',  '7음계'),
-    ('CAT_SN',  'CAT_SN_SC02',  '12음계'),
-    ('CAT_INT', 'CAT_INT_SC01', '코스1: 1도, 2도'),
-    ('CAT_INT', 'CAT_INT_SC02', '코스2: 2도, 3도'),
-    ('CAT_INT', 'CAT_INT_SC03', '코스3: 3도, 4도'),
-    ('CAT_INT', 'CAT_INT_SC04', '코스4: 4도, 5도'),
-    ('CAT_INT', 'CAT_INT_SC05', '코스5: 3도, 6도'),
-    ('CAT_INT', 'CAT_INT_SC06', '코스6: 2도, 7도'),
-]
-
-PART_DATA = [
-    # course_id,       part_id,               part_name,                              interval_pool
-    # ── CAT_SN SC01: 7음계 ──────────────────────────────────────────────────────
-    ('CAT_SN_SC01', 'CAT_SN_SC01_P01', '파트01 — C,F 구분',           ''),
-    ('CAT_SN_SC01', 'CAT_SN_SC01_P02', '파트02 — C,F,G 구분',         ''),
-    ('CAT_SN_SC01', 'CAT_SN_SC01_P03', '파트03 — C,D,F,G 구분',       ''),
-    ('CAT_SN_SC01', 'CAT_SN_SC01_P04', '파트04 — C,D,E,F,G 구분',     ''),
-    ('CAT_SN_SC01', 'CAT_SN_SC01_P05', '파트05 — C,D,E,F,G,A 구분',   ''),
-    ('CAT_SN_SC01', 'CAT_SN_SC01_P06', '파트06 — C,D,E,F,G,A,B 구분', ''),
-    # ── CAT_SN SC02: 12음계 ─────────────────────────────────────────────────────
-    ('CAT_SN_SC02', 'CAT_SN_SC02_P01', '파트01 — F,F# 구분',                    ''),
-    ('CAT_SN_SC02', 'CAT_SN_SC02_P02', '파트02 — C,C# 구분',                    ''),
-    ('CAT_SN_SC02', 'CAT_SN_SC02_P03', '파트03 — C,C#,F,F# 구분',               ''),
-    ('CAT_SN_SC02', 'CAT_SN_SC02_P04', '파트04 — G,G# 구분',                    ''),
-    ('CAT_SN_SC02', 'CAT_SN_SC02_P05', '파트05 — C,C#,F,F#,G,G# 구분',          ''),
-    ('CAT_SN_SC02', 'CAT_SN_SC02_P06', '파트06 — A,Bb,B 구분',                  ''),
-    ('CAT_SN_SC02', 'CAT_SN_SC02_P07', '파트07 — C,C#,F,F#,G,G#,A,Bb,B 구분',  ''),
-    ('CAT_SN_SC02', 'CAT_SN_SC02_P08', '파트08 — D,Eb,E 구분',                  ''),
-    ('CAT_SN_SC02', 'CAT_SN_SC02_P09', '파트09 — 12음 전체 구분',                ''),
-    # ── CAT_INT SC01~SC06 ───────────────────────────────────────────────────────
-    ('CAT_INT_SC01', 'CAT_INT_SC01_P01', '파트01 — 완전1도, 장2도',        'P1,M2'),
-    ('CAT_INT_SC01', 'CAT_INT_SC01_P02', '파트02 — 단2도, 장2도',          'm2,M2'),
-    ('CAT_INT_SC01', 'CAT_INT_SC01_P03', '파트03 — 전체복습',              'P1,m2,M2'),
-    ('CAT_INT_SC02', 'CAT_INT_SC02_P01', '파트01 — 장2도, 장3도',          'M2,M3'),
-    ('CAT_INT_SC02', 'CAT_INT_SC02_P02', '파트02 — 장2도, 단3도',          'M2,m3'),
-    ('CAT_INT_SC02', 'CAT_INT_SC02_P03', '파트03 — 단3도, 장3도',          'm3,M3'),
-    ('CAT_INT_SC02', 'CAT_INT_SC02_P04', '파트04 — 전체복습',              'M2,m3,M3'),
-    ('CAT_INT_SC03', 'CAT_INT_SC03_P01', '파트01 — 장3도, 완전4도',        'M3,P4'),
-    ('CAT_INT_SC03', 'CAT_INT_SC03_P02', '파트02 — 단3도, 장3도, 완전4도', 'm3,M3,P4'),
-    ('CAT_INT_SC03', 'CAT_INT_SC03_P03', '파트03 — 완전4도, 증4도',        'P4,A4'),
-    ('CAT_INT_SC03', 'CAT_INT_SC03_P04', '파트04 — 전체복습',              'm3,M3,P4,A4'),
-    ('CAT_INT_SC04', 'CAT_INT_SC04_P01', '파트01 — 완전4도, 완전5도',      'P4,P5'),
-    ('CAT_INT_SC04', 'CAT_INT_SC04_P02', '파트02 — 증4도, 완전5도',        'A4,P5'),
-    ('CAT_INT_SC04', 'CAT_INT_SC04_P03', '파트03 — 전체복습',              'P4,A4,P5'),
-    ('CAT_INT_SC05', 'CAT_INT_SC05_P01', '파트01 — 장3도, 단6도',          'M3,m6'),
-    ('CAT_INT_SC05', 'CAT_INT_SC05_P02', '파트02 — 단3도, 장6도',          'm3,M6'),
-    ('CAT_INT_SC05', 'CAT_INT_SC05_P03', '파트03 — 단6도, 장6도',          'm6,M6'),
-    ('CAT_INT_SC05', 'CAT_INT_SC05_P04', '파트04 — 전체복습',              'm3,M3,m6,M6'),
-    ('CAT_INT_SC06', 'CAT_INT_SC06_P01', '파트01 — 장2도, 단7도',          'M2,m7'),
-    ('CAT_INT_SC06', 'CAT_INT_SC06_P02', '파트02 — 단2도, 장7도',          'm2,M7'),
-    ('CAT_INT_SC06', 'CAT_INT_SC06_P03', '파트03 — 단7도, 장7도',          'm7,M7'),
-    ('CAT_INT_SC06', 'CAT_INT_SC06_P04', '파트04 — 전체복습',              'm2,M2,m7,M7'),
-]
-
-CURRICULUM_DATA = [
-    # part_id,            step_id,                   step_name,       question_type,  note_pool,                             direction,    answer_type,     difficulty_level
-    # ── CAT_SN SC01 ───────────────────────────────────────────────────────────────────────
-    ('CAT_SN_SC01_P01', 'CAT_SN_SC01_P01_S01', '같음/다름',    'single_note', 'C,F',                           '-', 'same_diff',    1),
-    ('CAT_SN_SC01_P01', 'CAT_SN_SC01_P01_S02', '악보',          'single_note', 'C,F',                           '-', 'name_2choice', 1),
-    ('CAT_SN_SC01_P01', 'CAT_SN_SC01_P01_S03', '음이름',        'single_note', 'C,F',                           '-', 'name_2choice', 1),
-    ('CAT_SN_SC01_P01', 'CAT_SN_SC01_P01_S04', '피아노주관식',  'single_note', 'C,F',                           '-', 'piano_subj',   1),
-    ('CAT_SN_SC01_P02', 'CAT_SN_SC01_P02_S01', '같음/다름',    'single_note', 'C,F,G',                         '-', 'same_diff',    1),
-    ('CAT_SN_SC01_P02', 'CAT_SN_SC01_P02_S02', '악보',          'single_note', 'C,F,G',                         '-', 'name_2choice', 1),
-    ('CAT_SN_SC01_P02', 'CAT_SN_SC01_P02_S03', '음이름',        'single_note', 'C,F,G',                         '-', 'name_2choice', 1),
-    ('CAT_SN_SC01_P02', 'CAT_SN_SC01_P02_S04', '피아노주관식',  'single_note', 'C,F,G',                         '-', 'piano_subj',   1),
-    ('CAT_SN_SC01_P03', 'CAT_SN_SC01_P03_S01', '같음/다름',    'single_note', 'C,D,F,G',                       '-', 'same_diff',    1),
-    ('CAT_SN_SC01_P03', 'CAT_SN_SC01_P03_S02', '악보',          'single_note', 'C,D,F,G',                       '-', 'name_2choice', 2),
-    ('CAT_SN_SC01_P03', 'CAT_SN_SC01_P03_S03', '음이름',        'single_note', 'C,D,F,G',                       '-', 'name_2choice', 2),
-    ('CAT_SN_SC01_P03', 'CAT_SN_SC01_P03_S04', '음이름(4지)',   'single_note', 'C,D,F,G',                       '-', 'name_4choice', 2),
-    ('CAT_SN_SC01_P03', 'CAT_SN_SC01_P03_S05', '피아노주관식',  'single_note', 'C,D,F,G',                       '-', 'piano_subj',   2),
-    ('CAT_SN_SC01_P04', 'CAT_SN_SC01_P04_S01', '같음/다름',    'single_note', 'C,D,E,F,G',                     '-', 'same_diff',    1),
-    ('CAT_SN_SC01_P04', 'CAT_SN_SC01_P04_S02', '악보',          'single_note', 'C,D,E,F,G',                     '-', 'name_2choice', 2),
-    ('CAT_SN_SC01_P04', 'CAT_SN_SC01_P04_S03', '음이름',        'single_note', 'C,D,E,F,G',                     '-', 'name_2choice', 2),
-    ('CAT_SN_SC01_P04', 'CAT_SN_SC01_P04_S04', '음이름(4지)',   'single_note', 'C,D,E,F,G',                     '-', 'name_4choice', 2),
-    ('CAT_SN_SC01_P04', 'CAT_SN_SC01_P04_S05', '피아노주관식',  'single_note', 'C,D,E,F,G',                     '-', 'piano_subj',   2),
-    ('CAT_SN_SC01_P05', 'CAT_SN_SC01_P05_S01', '같음/다름',    'single_note', 'C,D,E,F,G,A',                   '-', 'same_diff',    2),
-    ('CAT_SN_SC01_P05', 'CAT_SN_SC01_P05_S02', '악보',          'single_note', 'C,D,E,F,G,A',                   '-', 'name_2choice', 2),
-    ('CAT_SN_SC01_P05', 'CAT_SN_SC01_P05_S03', '음이름',        'single_note', 'C,D,E,F,G,A',                   '-', 'name_2choice', 2),
-    ('CAT_SN_SC01_P05', 'CAT_SN_SC01_P05_S04', '음이름(4지)',   'single_note', 'C,D,E,F,G,A',                   '-', 'name_4choice', 2),
-    ('CAT_SN_SC01_P05', 'CAT_SN_SC01_P05_S05', '피아노주관식',  'single_note', 'C,D,E,F,G,A',                   '-', 'piano_subj',   2),
-    ('CAT_SN_SC01_P06', 'CAT_SN_SC01_P06_S01', '같음/다름',    'single_note', 'C,D,E,F,G,A,B',                 '-', 'same_diff',    2),
-    ('CAT_SN_SC01_P06', 'CAT_SN_SC01_P06_S02', '악보',          'single_note', 'C,D,E,F,G,A,B',                 '-', 'name_2choice', 3),
-    ('CAT_SN_SC01_P06', 'CAT_SN_SC01_P06_S03', '음이름',        'single_note', 'C,D,E,F,G,A,B',                 '-', 'name_2choice', 3),
-    ('CAT_SN_SC01_P06', 'CAT_SN_SC01_P06_S04', '음이름(4지)',   'single_note', 'C,D,E,F,G,A,B',                 '-', 'name_4choice', 3),
-    ('CAT_SN_SC01_P06', 'CAT_SN_SC01_P06_S05', '피아노주관식',  'single_note', 'C,D,E,F,G,A,B',                 '-', 'piano_subj',   3),
-    # ── CAT_SN SC02 ───────────────────────────────────────────────────────────────────────
-    ('CAT_SN_SC02_P01', 'CAT_SN_SC02_P01_S01', '같음/다름',    'single_note', 'F,F#',                          '-', 'same_diff',    1),
-    ('CAT_SN_SC02_P01', 'CAT_SN_SC02_P01_S02', '악보',          'single_note', 'F,F#',                          '-', 'name_2choice', 1),
-    ('CAT_SN_SC02_P01', 'CAT_SN_SC02_P01_S03', '음이름',        'single_note', 'F,F#',                          '-', 'name_2choice', 1),
-    ('CAT_SN_SC02_P01', 'CAT_SN_SC02_P01_S04', '피아노주관식',  'single_note', 'F,F#',                          '-', 'piano_subj',   1),
-    ('CAT_SN_SC02_P02', 'CAT_SN_SC02_P02_S01', '같음/다름',    'single_note', 'C,C#',                          '-', 'same_diff',    1),
-    ('CAT_SN_SC02_P02', 'CAT_SN_SC02_P02_S02', '악보',          'single_note', 'C,C#',                          '-', 'name_2choice', 1),
-    ('CAT_SN_SC02_P02', 'CAT_SN_SC02_P02_S03', '음이름',        'single_note', 'C,C#',                          '-', 'name_2choice', 1),
-    ('CAT_SN_SC02_P02', 'CAT_SN_SC02_P02_S04', '피아노주관식',  'single_note', 'C,C#',                          '-', 'piano_subj',   1),
-    ('CAT_SN_SC02_P03', 'CAT_SN_SC02_P03_S01', '같음/다름',    'single_note', 'C,C#,F,F#',                     '-', 'same_diff',    1),
-    ('CAT_SN_SC02_P03', 'CAT_SN_SC02_P03_S02', '악보',          'single_note', 'C,C#,F,F#',                     '-', 'name_2choice', 2),
-    ('CAT_SN_SC02_P03', 'CAT_SN_SC02_P03_S03', '음이름',        'single_note', 'C,C#,F,F#',                     '-', 'name_2choice', 2),
-    ('CAT_SN_SC02_P03', 'CAT_SN_SC02_P03_S04', '음이름(4지)',   'single_note', 'C,C#,F,F#',                     '-', 'name_4choice', 2),
-    ('CAT_SN_SC02_P03', 'CAT_SN_SC02_P03_S05', '피아노주관식',  'single_note', 'C,C#,F,F#',                     '-', 'piano_subj',   2),
-    ('CAT_SN_SC02_P04', 'CAT_SN_SC02_P04_S01', '같음/다름',    'single_note', 'G,G#',                          '-', 'same_diff',    1),
-    ('CAT_SN_SC02_P04', 'CAT_SN_SC02_P04_S02', '악보',          'single_note', 'G,G#',                          '-', 'name_2choice', 1),
-    ('CAT_SN_SC02_P04', 'CAT_SN_SC02_P04_S03', '음이름',        'single_note', 'G,G#',                          '-', 'name_2choice', 1),
-    ('CAT_SN_SC02_P04', 'CAT_SN_SC02_P04_S04', '피아노주관식',  'single_note', 'G,G#',                          '-', 'piano_subj',   1),
-    ('CAT_SN_SC02_P05', 'CAT_SN_SC02_P05_S01', '같음/다름',    'single_note', 'C,C#,F,F#,G,G#',                '-', 'same_diff',    2),
-    ('CAT_SN_SC02_P05', 'CAT_SN_SC02_P05_S02', '악보',          'single_note', 'C,C#,F,F#,G,G#',                '-', 'name_2choice', 2),
-    ('CAT_SN_SC02_P05', 'CAT_SN_SC02_P05_S03', '음이름',        'single_note', 'C,C#,F,F#,G,G#',                '-', 'name_2choice', 2),
-    ('CAT_SN_SC02_P05', 'CAT_SN_SC02_P05_S04', '음이름(4지)',   'single_note', 'C,C#,F,F#,G,G#',                '-', 'name_4choice', 2),
-    ('CAT_SN_SC02_P05', 'CAT_SN_SC02_P05_S05', '피아노주관식',  'single_note', 'C,C#,F,F#,G,G#',                '-', 'piano_subj',   2),
-    ('CAT_SN_SC02_P06', 'CAT_SN_SC02_P06_S01', '같음/다름',    'single_note', 'A,Bb,B',                        '-', 'same_diff',    2),
-    ('CAT_SN_SC02_P06', 'CAT_SN_SC02_P06_S02', '악보',          'single_note', 'A,Bb,B',                        '-', 'name_2choice', 2),
-    ('CAT_SN_SC02_P06', 'CAT_SN_SC02_P06_S03', '음이름(3지)',   'single_note', 'A,Bb,B',                        '-', 'name_3choice', 2),
-    ('CAT_SN_SC02_P06', 'CAT_SN_SC02_P06_S04', '피아노주관식',  'single_note', 'A,Bb,B',                        '-', 'piano_subj',   2),
-    ('CAT_SN_SC02_P07', 'CAT_SN_SC02_P07_S01', '같음/다름',    'single_note', 'C,C#,F,F#,G,G#,A,Bb,B',         '-', 'same_diff',    2),
-    ('CAT_SN_SC02_P07', 'CAT_SN_SC02_P07_S02', '악보',          'single_note', 'C,C#,F,F#,G,G#,A,Bb,B',         '-', 'name_2choice', 2),
-    ('CAT_SN_SC02_P07', 'CAT_SN_SC02_P07_S03', '음이름',        'single_note', 'C,C#,F,F#,G,G#,A,Bb,B',         '-', 'name_2choice', 2),
-    ('CAT_SN_SC02_P07', 'CAT_SN_SC02_P07_S04', '음이름(4지)',   'single_note', 'C,C#,F,F#,G,G#,A,Bb,B',         '-', 'name_4choice', 3),
-    ('CAT_SN_SC02_P07', 'CAT_SN_SC02_P07_S05', '피아노주관식',  'single_note', 'C,C#,F,F#,G,G#,A,Bb,B',         '-', 'piano_subj',   3),
-    ('CAT_SN_SC02_P08', 'CAT_SN_SC02_P08_S01', '같음/다름',    'single_note', 'D,Eb,E',                        '-', 'same_diff',    2),
-    ('CAT_SN_SC02_P08', 'CAT_SN_SC02_P08_S02', '악보',          'single_note', 'D,Eb,E',                        '-', 'name_2choice', 2),
-    ('CAT_SN_SC02_P08', 'CAT_SN_SC02_P08_S03', '음이름(3지)',   'single_note', 'D,Eb,E',                        '-', 'name_3choice', 2),
-    ('CAT_SN_SC02_P08', 'CAT_SN_SC02_P08_S04', '피아노주관식',  'single_note', 'D,Eb,E',                        '-', 'piano_subj',   2),
-    ('CAT_SN_SC02_P09', 'CAT_SN_SC02_P09_S01', '같음/다름',    'single_note', 'C,C#,D,Eb,E,F,F#,G,G#,A,Bb,B', '-', 'same_diff',    3),
-    ('CAT_SN_SC02_P09', 'CAT_SN_SC02_P09_S02', '악보',          'single_note', 'C,C#,D,Eb,E,F,F#,G,G#,A,Bb,B', '-', 'name_2choice', 3),
-    ('CAT_SN_SC02_P09', 'CAT_SN_SC02_P09_S03', '음이름',        'single_note', 'C,C#,D,Eb,E,F,F#,G,G#,A,Bb,B', '-', 'name_2choice', 3),
-    ('CAT_SN_SC02_P09', 'CAT_SN_SC02_P09_S04', '음이름(4지)',   'single_note', 'C,C#,D,Eb,E,F,F#,G,G#,A,Bb,B', '-', 'name_4choice', 3),
-    ('CAT_SN_SC02_P09', 'CAT_SN_SC02_P09_S05', '피아노주관식',  'single_note', 'C,C#,D,Eb,E,F,F#,G,G#,A,Bb,B', '-', 'piano_subj',   3),
-    # ── CAT_INT SC01 ──────────────────────────────────────────────────────────────────────
-    ('CAT_INT_SC01_P01', 'CAT_INT_SC01_P01_S01', '음정 같음/다름',       'interval', 'P1,M2', 'ascending',  'same_diff',     1),
-    ('CAT_INT_SC01_P01', 'CAT_INT_SC01_P01_S02', '다양한 높이 비교',     'interval', 'P1,M2', 'ascending',  'height_compare',1),
-    ('CAT_INT_SC01_P01', 'CAT_INT_SC01_P01_S03', '음정 이름 고르기',     'interval', 'P1,M2', 'ascending',  'name_2choice',  1),
-    ('CAT_INT_SC01_P01', 'CAT_INT_SC01_P01_S04', '상행 음정 알아맞히기', 'interval', 'P1,M2', 'ascending',  'interval_subj', 1),
-    ('CAT_INT_SC01_P01', 'CAT_INT_SC01_P01_S05', '하행 음정 알아맞히기', 'interval', 'P1,M2', 'descending', 'interval_subj', 1),
-    ('CAT_INT_SC01_P01', 'CAT_INT_SC01_P01_S06', '건반에서 음정 선택',   'interval', 'P1,M2', 'ascending',  'keyboard_subj', 1),
-    ('CAT_INT_SC01_P01', 'CAT_INT_SC01_P01_S07', '화음에서 음정 찾기',   'interval', 'P1,M2', 'harmonic',   'interval_subj', 1),
-    ('CAT_INT_SC01_P02', 'CAT_INT_SC01_P02_S01', '음정 같음/다름',       'interval', 'm2,M2', 'ascending',  'same_diff',     1),
-    ('CAT_INT_SC01_P02', 'CAT_INT_SC01_P02_S02', '다양한 높이 비교',     'interval', 'm2,M2', 'ascending',  'height_compare',1),
-    ('CAT_INT_SC01_P02', 'CAT_INT_SC01_P02_S03', '음정 이름 고르기',     'interval', 'm2,M2', 'ascending',  'name_2choice',  1),
-    ('CAT_INT_SC01_P02', 'CAT_INT_SC01_P02_S04', '상행 음정 알아맞히기', 'interval', 'm2,M2', 'ascending',  'interval_subj', 1),
-    ('CAT_INT_SC01_P02', 'CAT_INT_SC01_P02_S05', '하행 음정 알아맞히기', 'interval', 'm2,M2', 'descending', 'interval_subj', 1),
-    ('CAT_INT_SC01_P02', 'CAT_INT_SC01_P02_S06', '건반에서 음정 선택',   'interval', 'm2,M2', 'ascending',  'keyboard_subj', 1),
-    ('CAT_INT_SC01_P02', 'CAT_INT_SC01_P02_S07', '화음에서 음정 찾기',   'interval', 'm2,M2', 'harmonic',   'interval_subj', 1),
-    ('CAT_INT_SC01_P03', 'CAT_INT_SC01_P03_S01', '음정 이름 고르기',     'interval', 'P1,m2,M2', 'ascending',  'name_3choice',  2),
-    ('CAT_INT_SC01_P03', 'CAT_INT_SC01_P03_S02', '상행 음정 알아맞히기', 'interval', 'P1,m2,M2', 'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC01_P03', 'CAT_INT_SC01_P03_S03', '하행 음정 알아맞히기', 'interval', 'P1,m2,M2', 'descending', 'interval_subj', 2),
-    ('CAT_INT_SC01_P03', 'CAT_INT_SC01_P03_S04', '건반에서 음정 선택',   'interval', 'P1,m2,M2', 'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC01_P03', 'CAT_INT_SC01_P03_S05', '화음에서 음정 찾기',   'interval', 'P1,m2,M2', 'harmonic',   'interval_subj', 2),
-    # ── CAT_INT SC02 ──────────────────────────────────────────────────────────────────────
-    ('CAT_INT_SC02_P01', 'CAT_INT_SC02_P01_S01', '음정 같음/다름',       'interval', 'M2,M3', 'ascending',  'same_diff',     1),
-    ('CAT_INT_SC02_P01', 'CAT_INT_SC02_P01_S02', '다양한 높이 비교',     'interval', 'M2,M3', 'ascending',  'height_compare',1),
-    ('CAT_INT_SC02_P01', 'CAT_INT_SC02_P01_S03', '음정 이름 고르기',     'interval', 'M2,M3', 'ascending',  'name_2choice',  1),
-    ('CAT_INT_SC02_P01', 'CAT_INT_SC02_P01_S04', '상행 음정 알아맞히기', 'interval', 'M2,M3', 'ascending',  'interval_subj', 1),
-    ('CAT_INT_SC02_P01', 'CAT_INT_SC02_P01_S05', '하행 음정 알아맞히기', 'interval', 'M2,M3', 'descending', 'interval_subj', 1),
-    ('CAT_INT_SC02_P01', 'CAT_INT_SC02_P01_S06', '건반에서 음정 선택',   'interval', 'M2,M3', 'ascending',  'keyboard_subj', 1),
-    ('CAT_INT_SC02_P01', 'CAT_INT_SC02_P01_S07', '화음에서 음정 찾기',   'interval', 'M2,M3', 'harmonic',   'interval_subj', 1),
-    ('CAT_INT_SC02_P02', 'CAT_INT_SC02_P02_S01', '음정 같음/다름',       'interval', 'M2,m3', 'ascending',  'same_diff',     1),
-    ('CAT_INT_SC02_P02', 'CAT_INT_SC02_P02_S02', '다양한 높이 비교',     'interval', 'M2,m3', 'ascending',  'height_compare',1),
-    ('CAT_INT_SC02_P02', 'CAT_INT_SC02_P02_S03', '음정 이름 고르기',     'interval', 'M2,m3', 'ascending',  'name_2choice',  1),
-    ('CAT_INT_SC02_P02', 'CAT_INT_SC02_P02_S04', '상행 음정 알아맞히기', 'interval', 'M2,m3', 'ascending',  'interval_subj', 1),
-    ('CAT_INT_SC02_P02', 'CAT_INT_SC02_P02_S05', '하행 음정 알아맞히기', 'interval', 'M2,m3', 'descending', 'interval_subj', 1),
-    ('CAT_INT_SC02_P02', 'CAT_INT_SC02_P02_S06', '건반에서 음정 선택',   'interval', 'M2,m3', 'ascending',  'keyboard_subj', 1),
-    ('CAT_INT_SC02_P02', 'CAT_INT_SC02_P02_S07', '화음에서 음정 찾기',   'interval', 'M2,m3', 'harmonic',   'interval_subj', 1),
-    ('CAT_INT_SC02_P03', 'CAT_INT_SC02_P03_S01', '음정 같음/다름',       'interval', 'm3,M3', 'ascending',  'same_diff',     1),
-    ('CAT_INT_SC02_P03', 'CAT_INT_SC02_P03_S02', '다양한 높이 비교',     'interval', 'm3,M3', 'ascending',  'height_compare',1),
-    ('CAT_INT_SC02_P03', 'CAT_INT_SC02_P03_S03', '음정 이름 고르기',     'interval', 'm3,M3', 'ascending',  'name_2choice',  1),
-    ('CAT_INT_SC02_P03', 'CAT_INT_SC02_P03_S04', '상행 음정 알아맞히기', 'interval', 'm3,M3', 'ascending',  'interval_subj', 1),
-    ('CAT_INT_SC02_P03', 'CAT_INT_SC02_P03_S05', '하행 음정 알아맞히기', 'interval', 'm3,M3', 'descending', 'interval_subj', 1),
-    ('CAT_INT_SC02_P03', 'CAT_INT_SC02_P03_S06', '건반에서 음정 선택',   'interval', 'm3,M3', 'ascending',  'keyboard_subj', 1),
-    ('CAT_INT_SC02_P03', 'CAT_INT_SC02_P03_S07', '화음에서 음정 찾기',   'interval', 'm3,M3', 'harmonic',   'interval_subj', 1),
-    ('CAT_INT_SC02_P04', 'CAT_INT_SC02_P04_S01', '음정 이름 고르기',     'interval', 'M2,m3,M3', 'ascending',  'name_3choice',  2),
-    ('CAT_INT_SC02_P04', 'CAT_INT_SC02_P04_S02', '상행 음정 알아맞히기', 'interval', 'M2,m3,M3', 'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC02_P04', 'CAT_INT_SC02_P04_S03', '하행 음정 알아맞히기', 'interval', 'M2,m3,M3', 'descending', 'interval_subj', 2),
-    ('CAT_INT_SC02_P04', 'CAT_INT_SC02_P04_S04', '건반에서 음정 선택',   'interval', 'M2,m3,M3', 'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC02_P04', 'CAT_INT_SC02_P04_S05', '화음에서 음정 찾기',   'interval', 'M2,m3,M3', 'harmonic',   'interval_subj', 2),
-    # ── CAT_INT SC03 ──────────────────────────────────────────────────────────────────────
-    ('CAT_INT_SC03_P01', 'CAT_INT_SC03_P01_S01', '음정 같음/다름',       'interval', 'M3,P4',       'ascending',  'same_diff',     1),
-    ('CAT_INT_SC03_P01', 'CAT_INT_SC03_P01_S02', '다양한 높이 비교',     'interval', 'M3,P4',       'ascending',  'height_compare',1),
-    ('CAT_INT_SC03_P01', 'CAT_INT_SC03_P01_S03', '음정 이름 고르기',     'interval', 'M3,P4',       'ascending',  'name_2choice',  1),
-    ('CAT_INT_SC03_P01', 'CAT_INT_SC03_P01_S04', '상행 음정 알아맞히기', 'interval', 'M3,P4',       'ascending',  'interval_subj', 1),
-    ('CAT_INT_SC03_P01', 'CAT_INT_SC03_P01_S05', '하행 음정 알아맞히기', 'interval', 'M3,P4',       'descending', 'interval_subj', 1),
-    ('CAT_INT_SC03_P01', 'CAT_INT_SC03_P01_S06', '건반에서 음정 선택',   'interval', 'M3,P4',       'ascending',  'keyboard_subj', 1),
-    ('CAT_INT_SC03_P01', 'CAT_INT_SC03_P01_S07', '화음에서 음정 찾기',   'interval', 'M3,P4',       'harmonic',   'interval_subj', 1),
-    ('CAT_INT_SC03_P02', 'CAT_INT_SC03_P02_S01', '음정 같음/다름',       'interval', 'm3,M3,P4',    'ascending',  'same_diff',     2),
-    ('CAT_INT_SC03_P02', 'CAT_INT_SC03_P02_S02', '다양한 높이 비교',     'interval', 'm3,M3,P4',    'ascending',  'height_compare',2),
-    ('CAT_INT_SC03_P02', 'CAT_INT_SC03_P02_S03', '음정 이름 고르기',     'interval', 'm3,M3,P4',    'ascending',  'name_3choice',  2),
-    ('CAT_INT_SC03_P02', 'CAT_INT_SC03_P02_S04', '상행 음정 알아맞히기', 'interval', 'm3,M3,P4',    'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC03_P02', 'CAT_INT_SC03_P02_S05', '하행 음정 알아맞히기', 'interval', 'm3,M3,P4',    'descending', 'interval_subj', 2),
-    ('CAT_INT_SC03_P02', 'CAT_INT_SC03_P02_S06', '건반에서 음정 선택',   'interval', 'm3,M3,P4',    'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC03_P02', 'CAT_INT_SC03_P02_S07', '화음에서 음정 찾기',   'interval', 'm3,M3,P4',    'harmonic',   'interval_subj', 2),
-    ('CAT_INT_SC03_P03', 'CAT_INT_SC03_P03_S01', '음정 같음/다름',       'interval', 'P4,A4',       'ascending',  'same_diff',     2),
-    ('CAT_INT_SC03_P03', 'CAT_INT_SC03_P03_S02', '다양한 높이 비교',     'interval', 'P4,A4',       'ascending',  'height_compare',2),
-    ('CAT_INT_SC03_P03', 'CAT_INT_SC03_P03_S03', '음정 이름 고르기',     'interval', 'P4,A4',       'ascending',  'name_2choice',  2),
-    ('CAT_INT_SC03_P03', 'CAT_INT_SC03_P03_S04', '상행 음정 알아맞히기', 'interval', 'P4,A4',       'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC03_P03', 'CAT_INT_SC03_P03_S05', '하행 음정 알아맞히기', 'interval', 'P4,A4',       'descending', 'interval_subj', 2),
-    ('CAT_INT_SC03_P03', 'CAT_INT_SC03_P03_S06', '건반에서 음정 선택',   'interval', 'P4,A4',       'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC03_P03', 'CAT_INT_SC03_P03_S07', '화음에서 음정 찾기',   'interval', 'P4,A4',       'harmonic',   'interval_subj', 2),
-    ('CAT_INT_SC03_P04', 'CAT_INT_SC03_P04_S01', '음정 이름 고르기',     'interval', 'm3,M3,P4,A4', 'ascending',  'name_4choice',  2),
-    ('CAT_INT_SC03_P04', 'CAT_INT_SC03_P04_S02', '상행 음정 알아맞히기', 'interval', 'm3,M3,P4,A4', 'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC03_P04', 'CAT_INT_SC03_P04_S03', '하행 음정 알아맞히기', 'interval', 'm3,M3,P4,A4', 'descending', 'interval_subj', 2),
-    ('CAT_INT_SC03_P04', 'CAT_INT_SC03_P04_S04', '건반에서 음정 선택',   'interval', 'm3,M3,P4,A4', 'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC03_P04', 'CAT_INT_SC03_P04_S05', '화음에서 음정 찾기',   'interval', 'm3,M3,P4,A4', 'harmonic',   'interval_subj', 2),
-    # ── CAT_INT SC04 ──────────────────────────────────────────────────────────────────────
-    ('CAT_INT_SC04_P01', 'CAT_INT_SC04_P01_S01', '음정 같음/다름',       'interval', 'P4,P5',    'ascending',  'same_diff',     2),
-    ('CAT_INT_SC04_P01', 'CAT_INT_SC04_P01_S02', '다양한 높이 비교',     'interval', 'P4,P5',    'ascending',  'height_compare',2),
-    ('CAT_INT_SC04_P01', 'CAT_INT_SC04_P01_S03', '음정 이름 고르기',     'interval', 'P4,P5',    'ascending',  'name_2choice',  2),
-    ('CAT_INT_SC04_P01', 'CAT_INT_SC04_P01_S04', '상행 음정 알아맞히기', 'interval', 'P4,P5',    'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC04_P01', 'CAT_INT_SC04_P01_S05', '하행 음정 알아맞히기', 'interval', 'P4,P5',    'descending', 'interval_subj', 2),
-    ('CAT_INT_SC04_P01', 'CAT_INT_SC04_P01_S06', '건반에서 음정 선택',   'interval', 'P4,P5',    'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC04_P01', 'CAT_INT_SC04_P01_S07', '화음에서 음정 찾기',   'interval', 'P4,P5',    'harmonic',   'interval_subj', 2),
-    ('CAT_INT_SC04_P02', 'CAT_INT_SC04_P02_S01', '음정 같음/다름',       'interval', 'A4,P5',    'ascending',  'same_diff',     2),
-    ('CAT_INT_SC04_P02', 'CAT_INT_SC04_P02_S02', '다양한 높이 비교',     'interval', 'A4,P5',    'ascending',  'height_compare',2),
-    ('CAT_INT_SC04_P02', 'CAT_INT_SC04_P02_S03', '음정 이름 고르기',     'interval', 'A4,P5',    'ascending',  'name_2choice',  2),
-    ('CAT_INT_SC04_P02', 'CAT_INT_SC04_P02_S04', '상행 음정 알아맞히기', 'interval', 'A4,P5',    'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC04_P02', 'CAT_INT_SC04_P02_S05', '하행 음정 알아맞히기', 'interval', 'A4,P5',    'descending', 'interval_subj', 2),
-    ('CAT_INT_SC04_P02', 'CAT_INT_SC04_P02_S06', '건반에서 음정 선택',   'interval', 'A4,P5',    'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC04_P02', 'CAT_INT_SC04_P02_S07', '화음에서 음정 찾기',   'interval', 'A4,P5',    'harmonic',   'interval_subj', 2),
-    ('CAT_INT_SC04_P03', 'CAT_INT_SC04_P03_S01', '음정 이름 고르기',     'interval', 'P4,A4,P5', 'ascending',  'name_3choice',  2),
-    ('CAT_INT_SC04_P03', 'CAT_INT_SC04_P03_S02', '상행 음정 알아맞히기', 'interval', 'P4,A4,P5', 'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC04_P03', 'CAT_INT_SC04_P03_S03', '하행 음정 알아맞히기', 'interval', 'P4,A4,P5', 'descending', 'interval_subj', 2),
-    ('CAT_INT_SC04_P03', 'CAT_INT_SC04_P03_S04', '건반에서 음정 선택',   'interval', 'P4,A4,P5', 'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC04_P03', 'CAT_INT_SC04_P03_S05', '화음에서 음정 찾기',   'interval', 'P4,A4,P5', 'harmonic',   'interval_subj', 2),
-    # ── CAT_INT SC05 ──────────────────────────────────────────────────────────────────────
-    ('CAT_INT_SC05_P01', 'CAT_INT_SC05_P01_S01', '음정 같음/다름',       'interval', 'M3,m6',       'ascending',  'same_diff',     2),
-    ('CAT_INT_SC05_P01', 'CAT_INT_SC05_P01_S02', '다양한 높이 비교',     'interval', 'M3,m6',       'ascending',  'height_compare',2),
-    ('CAT_INT_SC05_P01', 'CAT_INT_SC05_P01_S03', '음정 이름 고르기',     'interval', 'M3,m6',       'ascending',  'name_2choice',  2),
-    ('CAT_INT_SC05_P01', 'CAT_INT_SC05_P01_S04', '상행 음정 알아맞히기', 'interval', 'M3,m6',       'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC05_P01', 'CAT_INT_SC05_P01_S05', '하행 음정 알아맞히기', 'interval', 'M3,m6',       'descending', 'interval_subj', 2),
-    ('CAT_INT_SC05_P01', 'CAT_INT_SC05_P01_S06', '건반에서 음정 선택',   'interval', 'M3,m6',       'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC05_P01', 'CAT_INT_SC05_P01_S07', '화음에서 음정 찾기',   'interval', 'M3,m6',       'harmonic',   'interval_subj', 2),
-    ('CAT_INT_SC05_P02', 'CAT_INT_SC05_P02_S01', '음정 같음/다름',       'interval', 'm3,M6',       'ascending',  'same_diff',     2),
-    ('CAT_INT_SC05_P02', 'CAT_INT_SC05_P02_S02', '다양한 높이 비교',     'interval', 'm3,M6',       'ascending',  'height_compare',2),
-    ('CAT_INT_SC05_P02', 'CAT_INT_SC05_P02_S03', '음정 이름 고르기',     'interval', 'm3,M6',       'ascending',  'name_2choice',  2),
-    ('CAT_INT_SC05_P02', 'CAT_INT_SC05_P02_S04', '상행 음정 알아맞히기', 'interval', 'm3,M6',       'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC05_P02', 'CAT_INT_SC05_P02_S05', '하행 음정 알아맞히기', 'interval', 'm3,M6',       'descending', 'interval_subj', 2),
-    ('CAT_INT_SC05_P02', 'CAT_INT_SC05_P02_S06', '건반에서 음정 선택',   'interval', 'm3,M6',       'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC05_P02', 'CAT_INT_SC05_P02_S07', '화음에서 음정 찾기',   'interval', 'm3,M6',       'harmonic',   'interval_subj', 2),
-    ('CAT_INT_SC05_P03', 'CAT_INT_SC05_P03_S01', '음정 같음/다름',       'interval', 'm6,M6',       'ascending',  'same_diff',     2),
-    ('CAT_INT_SC05_P03', 'CAT_INT_SC05_P03_S02', '다양한 높이 비교',     'interval', 'm6,M6',       'ascending',  'height_compare',2),
-    ('CAT_INT_SC05_P03', 'CAT_INT_SC05_P03_S03', '음정 이름 고르기',     'interval', 'm6,M6',       'ascending',  'name_2choice',  2),
-    ('CAT_INT_SC05_P03', 'CAT_INT_SC05_P03_S04', '상행 음정 알아맞히기', 'interval', 'm6,M6',       'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC05_P03', 'CAT_INT_SC05_P03_S05', '하행 음정 알아맞히기', 'interval', 'm6,M6',       'descending', 'interval_subj', 2),
-    ('CAT_INT_SC05_P03', 'CAT_INT_SC05_P03_S06', '건반에서 음정 선택',   'interval', 'm6,M6',       'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC05_P03', 'CAT_INT_SC05_P03_S07', '화음에서 음정 찾기',   'interval', 'm6,M6',       'harmonic',   'interval_subj', 2),
-    ('CAT_INT_SC05_P04', 'CAT_INT_SC05_P04_S01', '음정 이름 고르기',     'interval', 'm3,M3,m6,M6', 'ascending',  'name_4choice',  3),
-    ('CAT_INT_SC05_P04', 'CAT_INT_SC05_P04_S02', '상행 음정 알아맞히기', 'interval', 'm3,M3,m6,M6', 'ascending',  'interval_subj', 3),
-    ('CAT_INT_SC05_P04', 'CAT_INT_SC05_P04_S03', '하행 음정 알아맞히기', 'interval', 'm3,M3,m6,M6', 'descending', 'interval_subj', 3),
-    ('CAT_INT_SC05_P04', 'CAT_INT_SC05_P04_S04', '건반에서 음정 선택',   'interval', 'm3,M3,m6,M6', 'ascending',  'keyboard_subj', 3),
-    ('CAT_INT_SC05_P04', 'CAT_INT_SC05_P04_S05', '화음에서 음정 찾기',   'interval', 'm3,M3,m6,M6', 'harmonic',   'interval_subj', 3),
-    # ── CAT_INT SC06 ──────────────────────────────────────────────────────────────────────
-    ('CAT_INT_SC06_P01', 'CAT_INT_SC06_P01_S01', '음정 같음/다름',       'interval', 'M2,m7',       'ascending',  'same_diff',     2),
-    ('CAT_INT_SC06_P01', 'CAT_INT_SC06_P01_S02', '다양한 높이 비교',     'interval', 'M2,m7',       'ascending',  'height_compare',2),
-    ('CAT_INT_SC06_P01', 'CAT_INT_SC06_P01_S03', '음정 이름 고르기',     'interval', 'M2,m7',       'ascending',  'name_2choice',  2),
-    ('CAT_INT_SC06_P01', 'CAT_INT_SC06_P01_S04', '상행 음정 알아맞히기', 'interval', 'M2,m7',       'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC06_P01', 'CAT_INT_SC06_P01_S05', '하행 음정 알아맞히기', 'interval', 'M2,m7',       'descending', 'interval_subj', 2),
-    ('CAT_INT_SC06_P01', 'CAT_INT_SC06_P01_S06', '건반에서 음정 선택',   'interval', 'M2,m7',       'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC06_P01', 'CAT_INT_SC06_P01_S07', '화음에서 음정 찾기',   'interval', 'M2,m7',       'harmonic',   'interval_subj', 2),
-    ('CAT_INT_SC06_P02', 'CAT_INT_SC06_P02_S01', '음정 같음/다름',       'interval', 'm2,M7',       'ascending',  'same_diff',     2),
-    ('CAT_INT_SC06_P02', 'CAT_INT_SC06_P02_S02', '다양한 높이 비교',     'interval', 'm2,M7',       'ascending',  'height_compare',2),
-    ('CAT_INT_SC06_P02', 'CAT_INT_SC06_P02_S03', '음정 이름 고르기',     'interval', 'm2,M7',       'ascending',  'name_2choice',  2),
-    ('CAT_INT_SC06_P02', 'CAT_INT_SC06_P02_S04', '상행 음정 알아맞히기', 'interval', 'm2,M7',       'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC06_P02', 'CAT_INT_SC06_P02_S05', '하행 음정 알아맞히기', 'interval', 'm2,M7',       'descending', 'interval_subj', 2),
-    ('CAT_INT_SC06_P02', 'CAT_INT_SC06_P02_S06', '건반에서 음정 선택',   'interval', 'm2,M7',       'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC06_P02', 'CAT_INT_SC06_P02_S07', '화음에서 음정 찾기',   'interval', 'm2,M7',       'harmonic',   'interval_subj', 2),
-    ('CAT_INT_SC06_P03', 'CAT_INT_SC06_P03_S01', '음정 같음/다름',       'interval', 'm7,M7',       'ascending',  'same_diff',     2),
-    ('CAT_INT_SC06_P03', 'CAT_INT_SC06_P03_S02', '다양한 높이 비교',     'interval', 'm7,M7',       'ascending',  'height_compare',2),
-    ('CAT_INT_SC06_P03', 'CAT_INT_SC06_P03_S03', '음정 이름 고르기',     'interval', 'm7,M7',       'ascending',  'name_2choice',  2),
-    ('CAT_INT_SC06_P03', 'CAT_INT_SC06_P03_S04', '상행 음정 알아맞히기', 'interval', 'm7,M7',       'ascending',  'interval_subj', 2),
-    ('CAT_INT_SC06_P03', 'CAT_INT_SC06_P03_S05', '하행 음정 알아맞히기', 'interval', 'm7,M7',       'descending', 'interval_subj', 2),
-    ('CAT_INT_SC06_P03', 'CAT_INT_SC06_P03_S06', '건반에서 음정 선택',   'interval', 'm7,M7',       'ascending',  'keyboard_subj', 2),
-    ('CAT_INT_SC06_P03', 'CAT_INT_SC06_P03_S07', '화음에서 음정 찾기',   'interval', 'm7,M7',       'harmonic',   'interval_subj', 2),
-    ('CAT_INT_SC06_P04', 'CAT_INT_SC06_P04_S01', '음정 이름 고르기',     'interval', 'm2,M2,m7,M7', 'ascending',  'name_4choice',  3),
-    ('CAT_INT_SC06_P04', 'CAT_INT_SC06_P04_S02', '상행 음정 알아맞히기', 'interval', 'm2,M2,m7,M7', 'ascending',  'interval_subj', 3),
-    ('CAT_INT_SC06_P04', 'CAT_INT_SC06_P04_S03', '하행 음정 알아맞히기', 'interval', 'm2,M2,m7,M7', 'descending', 'interval_subj', 3),
-    ('CAT_INT_SC06_P04', 'CAT_INT_SC06_P04_S04', '건반에서 음정 선택',   'interval', 'm2,M2,m7,M7', 'ascending',  'keyboard_subj', 3),
-    ('CAT_INT_SC06_P04', 'CAT_INT_SC06_P04_S05', '화음에서 음정 찾기',   'interval', 'm2,M2,m7,M7', 'harmonic',   'interval_subj', 3),
-]
-
-CURRICULUM_COLS = ['part_id', 'step_id', 'step_name', 'question_type',
-                   'note_pool', 'direction', 'answer_type', 'difficulty_level']
-
-# O(1) 조회 딕셔너리 빌드
-STEP_LOOKUP: dict = {r[1]: dict(zip(CURRICULUM_COLS, r)) for r in CURRICULUM_DATA}
-ALL_STEP_IDS: list = [r[1] for r in CURRICULUM_DATA]
-
-# CAT_INT 전체복습 파트 → 누적 step_id 리스트 매핑
-_int_review_part_ids = [
-    row[1]
-    for row in PART_DATA
-    if row[0].startswith('CAT_INT') and '전체복습' in row[2]
-]
-# → ['CAT_INT_SC01_P03', 'CAT_INT_SC02_P04', ..., 'CAT_INT_SC06_P04']
-
-INT_REVIEW_EXPANSION: dict = {}
-_cumulative: list = []
-for _i, _pid in enumerate(_int_review_part_ids):
-    if _i == 0:
-        # 첫 번째 복습: 해당 코스 전체 (prefix = CAT_INT_SC01)
-        _course_prefix = _pid.rsplit('_P', 1)[0]  # 'CAT_INT_SC01_P03' → 'CAT_INT_SC01'
-        _cumulative = [sid for sid in ALL_STEP_IDS if sid.startswith(_course_prefix + '_')]
-    else:
-        # 이후 복습: 이전 누적 + 현재 파트 스텝
-        _part_steps = [sid for sid in ALL_STEP_IDS if sid.startswith(_pid + '_')]
-        _cumulative = _cumulative + _part_steps
-    INT_REVIEW_EXPANSION[_pid] = list(_cumulative)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 3. Answer Type & Difficulty 규칙
-# ══════════════════════════════════════════════════════════════════════════════
-ANSWER_TYPE_RULES: dict = {
-    # answer_type        label               num_choices  present_count  distractor_strategy   pool_size_rule
-    'same_diff':        ('같음/다름',             2,           2,         'none',              '풀 크기 무관'),
-    'name_2choice':     ('이름 2지선다',           2,           1,         'asc_by_distance',   '풀≤2:use_all / 풀≥3:asc_by_dist'),
-    'name_3choice':     ('이름 3지선다',           3,           1,         'use_all',           '풀=3 전용'),
-    'name_4choice':     ('이름 4지선다',           4,           1,         'asc_by_distance',   '풀≥4 전용'),
-    'height_compare':   ('다양한 높이 비교',        2,           2,         'none',              '음정: 같은 음정 다른 높이'),
-    'interval_subj':    ('음정 주관식',            0,           1,         'none',              '음정: direction 컬럼으로 상행/하행/화음 구분'),
-    'keyboard_subj':    ('건반 선택',              0,           1,         'none',              '음정: 음정이름 제시→건반 선택'),
-    'piano_subj':       ('피아노 주관식',           0,           1,         'none',              '단일음: 피아노 건반 직접 입력'),
-}
-
-DIFFICULTY_RULES: dict = {
-    # level: (label, octaves, proximity_strategy, proximity_semitones)
-    # rules.md 2-1: 쉬움=4옥타브만, 보통=3또는5옥타브(4제외), 어려움=3~6옥타브
-    1: ('쉬움',   [4],            'desc_by_distance', '≥5반음/≥4반음차(오답 멀리)'),
-    2: ('보통',   [3, 5],         'shuffle',           '무작위 배치'),
-    3: ('어려움', [3, 4, 5, 6],   'asc_by_distance',  '≤2반음/≤1반음차(오답 가까이)'),
-}
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 4. 음 유틸 (MIDI ↔ 음이름 변환)
-# ══════════════════════════════════════════════════════════════════════════════
-NOTE_NAMES: list = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'G#', 'A', 'Bb', 'B']
-
-ENHARMONIC_MAP: dict = {
-    'Db': 'C#', 'D#': 'Eb', 'Gb': 'F#',
-    'Ab': 'G#', 'A#': 'Bb', 'Cb': 'B', 'E#': 'F',
-}
-
-INTERVAL_SEMITONES: dict = {
-    'P1': ('완전1도',  0),
-    'm2': ('단2도',    1),
-    'M2': ('장2도',    2),
-    'm3': ('단3도',    3),
-    'M3': ('장3도',    4),
-    'P4': ('완전4도',  5),
-    'A4': ('증4도',    6),
-    'P5': ('완전5도',  7),
-    'm6': ('단6도',    8),
-    'M6': ('장6도',    9),
-    'm7': ('단7도',   10),
-    'M7': ('장7도',   11),
-}
-
-
 def normalize_note_name(name: str) -> str:
     return ENHARMONIC_MAP.get(name, name)
 
@@ -484,7 +122,7 @@ def octave_difficulty(ref_midi: int) -> float:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5. SingleNoteGenerator
+# 2. SingleNoteGenerator
 # ══════════════════════════════════════════════════════════════════════════════
 class SingleNoteGenerator:
     def __init__(self, seed: Optional[int] = None):
@@ -503,7 +141,6 @@ class SingleNoteGenerator:
         answer_type = step['answer_type']
 
         if answer_type == 'same_diff':
-            # present_notes: 제시된 두 음 / answer: '같음' 또는 '다름' / choices: ['같음','다름']
             present_notes, same_diff_label = self._build_same_diff(
                 answer_midi, pool, d_rule['octaves']
             )
@@ -549,7 +186,6 @@ class SingleNoteGenerator:
         return dict(zip(keys, DIFFICULTY_RULES[level]))
 
     def _pick_answer(self, step_id: str, midi_pool: list) -> int:
-        # rules.md 3-4: 같은 정답 3회 연속 방지
         history = self._session_history.get(step_id, [])
         excluded = set()
         if len(history) >= 2 and history[-1] == history[-2]:
@@ -566,7 +202,6 @@ class SingleNoteGenerator:
             second, label = first, '같음'
         else:
             answer_name = first[:-1]
-            # 두 번째 제시음: 다른 음이름 & 첫 번째 음 기준 1옥타브 이내 (12반음)
             others = [
                 m for m in pool_to_midi_range(pool, [3, 4, 5, 6])
                 if midi_to_note(m)[:-1] != answer_name
@@ -582,10 +217,7 @@ class SingleNoteGenerator:
                        num_choices, distractor_strategy, proximity_strategy):
         answer_name = midi_to_note(answer_midi)[:-1]
         all_midi    = pool_to_midi_range(pool, octaves)
-        candidates  = [
-            m for m in all_midi
-            if midi_to_note(m)[:-1] != answer_name
-        ]
+        candidates  = [m for m in all_midi if midi_to_note(m)[:-1] != answer_name]
         if len(pool) <= 2 or distractor_strategy == 'use_all':
             distractor_pool = candidates
         else:
@@ -619,7 +251,7 @@ class SingleNoteGenerator:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 6. IntervalGenerator
+# 3. IntervalGenerator
 # ══════════════════════════════════════════════════════════════════════════════
 class IntervalGenerator:
     def __init__(self, seed: Optional[int] = None):
@@ -642,7 +274,6 @@ class IntervalGenerator:
         answer_type = step['answer_type']
 
         if answer_type == 'same_diff':
-            # present_notes: 제시된 두 음정 쌍(4음) / answer: '같음'/'다름' / choices: ['같음','다름']
             present_notes, same_diff_label = self._build_same_diff(
                 root_midi, symbol, ipool, d_rule, direction
             )
@@ -701,7 +332,6 @@ class IntervalGenerator:
         return dict(zip(keys, DIFFICULTY_RULES[level]))
 
     def _pick_root_and_interval(self, step_id, ipool, octaves, direction):
-        # rules.md 3-4: 같은 정답(음정 종류) 3회 연속 방지
         history = self._session_history.get(step_id, [])
         excluded_symbols = set()
         if len(history) >= 2 and history[-1][1] == history[-2][1]:
@@ -723,15 +353,12 @@ class IntervalGenerator:
         return self.rng.choice(candidates)
 
     def _build_same_diff(self, root_midi, symbol, ipool, d_rule, direction):
-        # 두 음정은 항상 동일한 기준음(첫음)에서 출발한다.
-        # height_compare 와의 차이: same_diff = 같은 출발음, 음정 종류가 같은지 판별
         is_same = self.rng.choice([True, False])
         p1_low, p1_high = interval_to_midi_pair(root_midi, symbol, direction)
         if is_same:
             label = '같음'
             p2_low, p2_high = p1_low, p1_high
         else:
-            # 같은 기준음, 다른 음정 종류
             valid_others = [
                 s for s in ipool if s != symbol
                 and MIDI_MIN <= build_interval_midi(root_midi, s, direction) <= MIDI_MAX
@@ -798,7 +425,7 @@ class IntervalGenerator:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 7. 난이도 곡선 함수
+# 4. 난이도 곡선 함수
 # ══════════════════════════════════════════════════════════════════════════════
 def difficulty_curve(n_questions: int, mode: str = 'linear',
                      fixed_level: int = 1,
@@ -820,37 +447,21 @@ def difficulty_curve(n_questions: int, mode: str = 'linear',
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 8. 범위 → step_id 목록 변환
+# 5. 범위 → step_id 목록 변환
 # ══════════════════════════════════════════════════════════════════════════════
-VALID_CATEGORY_PREFIXES = ('CAT_SN', 'CAT_INT')
-
-
 def resolve_range(range_str: str) -> list:
-    """
-    범위 문자열 → 매칭되는 step_id 리스트
-
-    예:
-      'CAT_SN'              → 단일음 전체 step_id
-      'CAT_SN_SC01'         → 7음계 코스 전체
-      'CAT_SN_SC01_P01'     → P01 파트 전체
-      'CAT_SN_SC01_P01_S01' → 특정 스텝 1개
-    """
-    # 최상위 카테고리로 시작해야 함
     if not any(range_str.startswith(p) for p in VALID_CATEGORY_PREFIXES):
         raise ValueError(
             f"범위 '{range_str}'는 CAT_SN 또는 CAT_INT 로 시작해야 합니다.\n"
             f"  불가능 예시: SC01_P01, P01_S01 (최상단 카테고리가 없으면 안됨)"
         )
 
-    # 정확한 step_id 매칭
     if range_str in STEP_LOOKUP:
         return [range_str]
 
-    # CAT_INT 전체복습 파트 누적 확장
     if range_str in INT_REVIEW_EXPANSION:
         return INT_REVIEW_EXPANSION[range_str]
 
-    # 접두사로 필터
     prefix = range_str if range_str.endswith('_') else range_str + '_'
     matched = [sid for sid in ALL_STEP_IDS if sid.startswith(prefix)]
 
@@ -863,13 +474,10 @@ def resolve_range(range_str: str) -> list:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 9. 문제 배치 생성
+# 6. 문제 배치 생성
 # ══════════════════════════════════════════════════════════════════════════════
 def generate_batch(step_ids: list, amount: int, diff_mode: str,
                    fixed_level: int, seed: Optional[int]) -> list:
-    """
-    step_ids 범위에서 amount 개 문제 생성 (step_id 랜덤 선택)
-    """
     rng = random.Random(seed)
     levels = difficulty_curve(amount, mode=diff_mode, fixed_level=fixed_level)
 
@@ -894,33 +502,15 @@ def generate_batch(step_ids: list, amount: int, diff_mode: str,
     return records
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 9-b. 전체 경우 생성 (--all)
-# ══════════════════════════════════════════════════════════════════════════════
 def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
-    """
-    step_ids 범위 내 등장 가능한 모든 문제를 빠짐없이 생성.
-
-    - single_note: 난이도 옥타브 범위 내 모든 MIDI 음을 answer로 순회
-      - same_diff → 음마다 '같음' / '다름' 2가지 생성
-      - piano_subj → 음마다 1문제
-      - name_Xchoice → 음마다 1문제 (distractors 결정론적 선택)
-    - interval: 유효한 모든 (root_midi, symbol) 쌍을 순회
-      - same_diff → 쌍마다 '같음' / '다름' 2가지 생성
-      - height_compare → 쌍마다 1문제 (다른 높이 1개)
-      - interval_subj / keyboard_subj → 쌍마다 1문제
-      - name_Xchoice → 쌍마다 1문제
-    """
     rng     = random.Random(seed)
     records = []
-
-    # 전체 경우: 난이도 무관하게 C3~C6 전체 옥타브 사용 (rules.md 1-1)
     FULL_OCTAVES = [3, 4, 5, 6]
 
     for sid in step_ids:
         step         = STEP_LOOKUP[sid]
         diff_level   = step['difficulty_level']
-        prox_strategy = DIFFICULTY_RULES[diff_level][2]   # octaves 다음 인덱스
+        prox_strategy = DIFFICULTY_RULES[diff_level][2]
         answer_type  = step['answer_type']
         at_vals      = ANSWER_TYPE_RULES[answer_type]
         num_choices  = at_vals[1]
@@ -942,14 +532,12 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                 answer_name = answer[:-1]
 
                 if answer_type == 'same_diff':
-                    # 같음: answer='같음', choices=['같음','다름'], present=[음,음]
                     records.append({**base,
                         'question_type': 'single_note', 'answer_type': answer_type,
                         'direction': '-', 'answer': '같음', 'answer_midi': answer_midi,
                         'present_notes': [answer, answer], 'choices': ['같음', '다름'],
                         'total_difficulty': octave_difficulty(answer_midi),
                     })
-                    # 다름: 다른 음이름 & 첫 번째 음 기준 1옥타브 이내 모든 조합
                     all_second = pool_to_midi_range(pool, FULL_OCTAVES)
                     for second_midi in all_second:
                         if midi_to_note(second_midi)[:-1] != answer_name and abs(second_midi - answer_midi) <= 12:
@@ -969,20 +557,14 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                         'total_difficulty': octave_difficulty(answer_midi),
                     })
 
-                else:  # name_2/3/4choice — 오답은 풀 내부에서만 (rules.md 3-1)
-                    candidates = [
-                        m for m in midi_pool
-                        if midi_to_note(m)[:-1] != answer_name
-                    ]
+                else:
+                    candidates = [m for m in midi_pool if midi_to_note(m)[:-1] != answer_name]
                     if len(pool) <= 2 or dist_strategy == 'use_all':
                         distractor_pool = candidates
                     elif prox_strategy == 'asc_by_distance':
-                        distractor_pool = sorted(candidates,
-                                                 key=lambda m: semitone_distance(m, answer_midi))
+                        distractor_pool = sorted(candidates, key=lambda m: semitone_distance(m, answer_midi))
                     elif prox_strategy == 'desc_by_distance':
-                        distractor_pool = sorted(candidates,
-                                                 key=lambda m: semitone_distance(m, answer_midi),
-                                                 reverse=True)
+                        distractor_pool = sorted(candidates, key=lambda m: semitone_distance(m, answer_midi), reverse=True)
                     else:
                         distractor_pool = candidates[:]
                         rng.shuffle(distractor_pool)
@@ -1007,7 +589,6 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
         else:  # interval
             ipool     = parse_interval_pool(step['note_pool'])
             direction = step['direction']
-            # 난이도 무관: C3~C6 전체에서 유효한 모든 (기준음, 음정) 쌍 열거
             all_pairs = [
                 (r, sym)
                 for r in root_midi_pool(FULL_OCTAVES)
@@ -1034,7 +615,6 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                 }
 
                 if answer_type == 'same_diff':
-                    # 같음: answer='같음', choices=['같음','다름'], 같은 음정 쌍 두 번 제시
                     p1l, p1h = interval_to_midi_pair(root_midi, symbol, direction)
                     records.append({**int_base,
                         'answer': '같음',
@@ -1042,7 +622,6 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                                           midi_to_note(p1l), midi_to_note(p1h)],
                         'choices': ['같음', '다름'],
                     })
-                    # 다름: 같은 기준음, 다른 음정 종류 (첫음이 동일해야 함)
                     for alt in [s for s in ipool if s != symbol]:
                         if MIDI_MIN <= build_interval_midi(root_midi, alt, direction) <= MIDI_MAX:
                             p2l, p2h = interval_to_midi_pair(root_midi, alt, direction)
@@ -1054,7 +633,6 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                             })
 
                 elif answer_type == 'height_compare':
-                    # 같음: 같은 음정을 다른 높이에서 제시
                     p1l, p1h = interval_to_midi_pair(root_midi, symbol, direction)
                     alt_roots = sorted(
                         r for r in root_midi_pool(FULL_OCTAVES)
@@ -1069,7 +647,6 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                                               midi_to_note(p2l), midi_to_note(p2h)],
                             'choices': ['같음', '다름'],
                         })
-                    # 다름: 다른 높이(다른 기준음)에서 다른 음정 제시
                     for alt_sym in [s for s in ipool if s != symbol]:
                         for alt_root in sorted(
                             r for r in root_midi_pool(FULL_OCTAVES)
@@ -1089,14 +666,13 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                         'present_notes': present_base, 'choices': None,
                     })
 
-                else:  # name_2/3/4choice — 오답은 풀 내부에서만 (rules.md 3-1)
+                else:  # name_2/3/4choice
                     target_st = interval_semitones(symbol)
                     pool_syms = [s for s in ipool if s != symbol]
                     if prox_strategy == 'asc_by_distance':
                         pool_syms.sort(key=lambda s: abs(interval_semitones(s) - target_st))
                     elif prox_strategy == 'desc_by_distance':
-                        pool_syms.sort(key=lambda s: abs(interval_semitones(s) - target_st),
-                                       reverse=True)
+                        pool_syms.sort(key=lambda s: abs(interval_semitones(s) - target_st), reverse=True)
                     else:
                         rng.shuffle(pool_syms)
                     distractors = pool_syms[:num_choices - 1]
@@ -1110,10 +686,9 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 10. 레코드 → 출력용 행 변환
+# 7. 레코드 → 출력용 행 변환
 # ══════════════════════════════════════════════════════════════════════════════
 def record_to_row(q: dict, range_label: str) -> dict:
-    """문제 dict → 출력 테이블 행 dict"""
     direction  = q.get('direction', '-')
     sep = ' + ' if direction == 'harmonic' else ' → '
     notes = q['present_notes']
@@ -1123,15 +698,14 @@ def record_to_row(q: dict, range_label: str) -> dict:
         present_str = sep.join(notes)
 
     if q.get('answer_type') == 'keyboard_subj':
-        # 제시: 기준음 | 음정이름, 정답: 목표음
         given_note  = q['root_note'] if direction != 'descending' else q['upper_note']
         target_note = q['upper_note'] if direction != 'descending' else q['root_note']
         present_str = f"{given_note} | {q['answer_interval']} ({q['answer_interval_ko']})"
         answer_str  = target_note
     elif q.get('answer_type') == 'interval_subj':
-        answer_str = present_str  # 음정을 구성하는 음 이름 (예: G#4 → C5)
+        answer_str = present_str
     elif q.get('answer_type') in ('same_diff', 'height_compare'):
-        answer_str = q.get('answer', '?')   # '같음' 또는 '다름'
+        answer_str = q.get('answer', '?')
     elif q['question_type'] == 'interval':
         answer_str = f"{q['answer_interval']} ({q['answer_interval_ko']})"
     else:
@@ -1157,7 +731,7 @@ def record_to_row(q: dict, range_label: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 11. 출력 포맷터
+# 8. 출력 포맷터
 # ══════════════════════════════════════════════════════════════════════════════
 def output_print(rows: list):
     if not rows:
@@ -1216,7 +790,7 @@ def output_md(rows: list, filepath: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 12. CLI
+# 9. CLI
 # ══════════════════════════════════════════════════════════════════════════════
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -1261,13 +835,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '--amount', '-a',
-        dest='amount', type=int, default=10, metavar='N',
-        help='범위당 문제 개수 (기본값: 10)'
+        dest='amount', type=int, default=DEFAULT_AMOUNT, metavar='N',
+        help=f'범위당 문제 개수 (기본값: {DEFAULT_AMOUNT})'
     )
     parser.add_argument(
         '--difficulty', '-d',
-        dest='difficulty', default='linear', metavar='MODE',
-        help='난이도 설정: 1, 2, 3 (고정) 또는 linear, stairs, fixed (곡선). 기본값: linear'
+        dest='difficulty', default=DEFAULT_DIFFICULTY, metavar='MODE',
+        help=f'난이도 설정: 1, 2, 3 (고정) 또는 linear, stairs, fixed (곡선). 기본값: {DEFAULT_DIFFICULTY}'
     )
     parser.add_argument(
         '--shuffle', '-s',
@@ -1278,13 +852,13 @@ def build_parser() -> argparse.ArgumentParser:
         '--format', '-f',
         dest='formats', metavar='FMT', nargs='+',
         choices=['xlsx', 'csv', 'md', 'print'],
-        default=['print'],
-        help='출력 포맷 (복수 선택 가능): xlsx, csv, md, print. 기본값: print'
+        default=DEFAULT_FORMATS,
+        help=f'출력 포맷 (복수 선택 가능): xlsx, csv, md, print. 기본값: {DEFAULT_FORMATS[0]}'
     )
     parser.add_argument(
         '--output', '-o',
-        dest='output', default='example/', metavar='PATH',
-        help='저장 경로 (기본값: example/)'
+        dest='output', default=DEFAULT_OUTPUT, metavar='PATH',
+        help=f'저장 경로 (기본값: {DEFAULT_OUTPUT})'
     )
     parser.add_argument(
         '--all', '-A',
@@ -1312,7 +886,7 @@ def make_filepath(output_dir: str, fmt: str, timestamp: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 13. 메인
+# 10. 메인
 # ══════════════════════════════════════════════════════════════════════════════
 def main():
     parser = build_parser()
@@ -1320,7 +894,6 @@ def main():
 
     # ── 범위 결정 ────────────────────────────────────────────────────────────
     if not args.ranges:
-        # 기본값: 랜덤 스텝 1개
         rng = random.Random(args.seed)
         random_step = rng.choice(ALL_STEP_IDS)
         print(f'[기본값] 랜덤 스텝 선택: {random_step}')
