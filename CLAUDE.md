@@ -45,7 +45,7 @@ pip install -r requirements.txt   # pandas, openpyxl
 
 전체 애플리케이션은 단일 파일(`eargenx.py`, ~1,400줄)에 13개 섹션으로 구성됩니다:
 
-1. **시스템 상수** — MIDI 범위 (C3=48 ~ C6=84)
+1. **시스템 상수** — MIDI 범위 (C3=48 ~ B5=83)
 2. **커리큘럼 데이터** — `PART_DATA`, `CURRICULUM_DATA` 정적 튜플; 카테고리 → 코스 → 파트 → 스텝 계층 (60+ 스텝)
 3. **룩업 테이블** — `STEP_LOOKUP`, `ALL_STEP_IDS`, `INT_REVIEW_EXPANSION` (O(1) 조회)
 4. **음 유틸** — MIDI ↔ 음이름 변환, 음정 반음 계산, 이명동음 정규화, 음 풀 파싱, `octave_difficulty()`

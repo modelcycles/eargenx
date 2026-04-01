@@ -653,6 +653,28 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
     return records
 
 
+def sample_diverse(records: list, limit: int, rng: random.Random) -> list:
+    """MIDI 기준 균등 간격으로 최대 limit개 선택 (음역 다양성 극대화)."""
+    if not records or limit <= 0:
+        return []
+    key = lambda r: r.get('answer_midi') or r.get('root_midi', 0)
+    sorted_recs = sorted(records, key=key)
+    if len(sorted_recs) <= limit:
+        return sorted_recs
+    step = len(sorted_recs) / limit
+    return [sorted_recs[int(i * step)] for i in range(limit)]
+
+
+def generate_per_step_limit(step_ids: list, limit: int, seed: Optional[int]) -> list:
+    """스텝 단위로 exhaustive 풀 생성 후 각 스텝에 limit 적용."""
+    rng = random.Random(seed)
+    records = []
+    for sid in step_ids:
+        step_records = generate_all_exhaustive([sid], seed=seed)
+        records.extend(sample_diverse(step_records, limit, rng))
+    return records
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 7. 레코드 → 출력용 행 변환
 # ══════════════════════════════════════════════════════════════════════════════
@@ -833,6 +855,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest='all_questions', action='store_true',
         help='범위 내 등장 가능한 모든 문제 생성 (--amount 무시)'
     )
+    parser.add_argument(
+        '--limit', '-l',
+        dest='limit', type=int, default=None, metavar='N',
+        help='스텝당 최대 문제 수 (중복 없음, 음역 다양성 우선 선별). --amount 대신 사용'
+    )
     return parser
 
 
@@ -890,10 +917,26 @@ def main():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     for range_label, step_ids in ranges:
-        if args.all_questions:
+        if args.all_questions and args.limit is not None:
+            print(f'\n생성 중: [{range_label}] 전체 경우 (--all) + 스텝당 최대 {args.limit}개 (--limit) ...')
+            batch = generate_per_step_limit(
+                step_ids=step_ids,
+                limit=args.limit,
+                seed=args.seed,
+            )
+            print(f'  → {len(batch)}개 문제 산출 ({len(step_ids)}개 스텝)')
+        elif args.all_questions:
             print(f'\n생성 중: [{range_label}] 전체 경우 (--all) ...')
             batch = generate_all_exhaustive(step_ids=step_ids, seed=args.seed)
             print(f'  → {len(batch)}개 문제 산출')
+        elif args.limit is not None:
+            print(f'\n생성 중: [{range_label}] 스텝당 최대 {args.limit}개 (--limit) ...')
+            batch = generate_per_step_limit(
+                step_ids=step_ids,
+                limit=args.limit,
+                seed=args.seed,
+            )
+            print(f'  → {len(batch)}개 문제 산출 ({len(step_ids)}개 스텝)')
         else:
             print(f'\n생성 중: [{range_label}] {args.amount}문제 ...')
             batch = generate_batch(
