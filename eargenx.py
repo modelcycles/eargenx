@@ -668,14 +668,14 @@ def record_to_row(q: dict, range_label: str) -> dict:
     if q.get('answer_type') == 'keyboard_subj':
         given_note  = q['root_note'] if direction != 'descending' else q['upper_note']
         target_note = q['upper_note'] if direction != 'descending' else q['root_note']
-        present_str = f"{given_note} | {q['answer_interval']} ({q['answer_interval_ko']})"
+        present_str = f"{given_note} | {q['answer_interval_ko']}"
         answer_str  = target_note
     elif q.get('answer_type') == 'interval_subj':
         answer_str = present_str
     elif q.get('answer_type') in ('same_diff', 'height_compare'):
         answer_str = q.get('answer', '?')
     elif q['question_type'] == 'interval':
-        answer_str = f"{q['answer_interval']} ({q['answer_interval_ko']})"
+        answer_str = q['answer_interval_ko']
     else:
         answer_str = q['answer']
 
