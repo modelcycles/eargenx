@@ -690,6 +690,25 @@ def sample_diverse(records: list, limit: int, rng: random.Random) -> list:
     return _stride_sample(records, limit)
 
 
+def balance_same_diff(records: list) -> list:
+    """같음/다름 정답 유형(same_diff, height_compare)의 스텝별 5:5 비율 맞춤.
+    limit 없이 --all 사용 시 전체 풀에 적용. 비해당 유형은 그대로 반환.
+    """
+    by_step: dict = {}
+    for r in records:
+        by_step.setdefault(r['step_id'], []).append(r)
+    result = []
+    for step_records in by_step.values():
+        if step_records[0].get('answer_type') in ('same_diff', 'height_compare'):
+            same = [r for r in step_records if r.get('answer') == '같음']
+            diff = [r for r in step_records if r.get('answer') == '다름']
+            n = min(len(same), len(diff))
+            result.extend(_stride_sample(same, n) + _stride_sample(diff, n))
+        else:
+            result.extend(step_records)
+    return result
+
+
 def generate_per_step_limit(step_ids: list, limit: int, seed: Optional[int]) -> list:
     """스텝 단위로 exhaustive 풀 생성 후 각 스텝에 limit 적용."""
     rng = random.Random(seed)
@@ -952,7 +971,7 @@ def main():
             print(f'  → {len(batch)}개 문제 산출 ({len(step_ids)}개 스텝)')
         elif args.all_questions:
             print(f'\n생성 중: [{range_label}] 전체 경우 (--all) ...')
-            batch = generate_all_exhaustive(step_ids=step_ids, seed=args.seed)
+            batch = balance_same_diff(generate_all_exhaustive(step_ids=step_ids, seed=args.seed))
             print(f'  → {len(batch)}개 문제 산출')
         elif args.limit is not None:
             print(f'\n생성 중: [{range_label}] 스텝당 최대 {args.limit}개 (--limit) ...')
