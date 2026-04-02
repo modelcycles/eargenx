@@ -653,16 +653,41 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
     return records
 
 
-def sample_diverse(records: list, limit: int, rng: random.Random) -> list:
-    """MIDI 기준 균등 간격으로 최대 limit개 선택 (음역 다양성 극대화)."""
-    if not records or limit <= 0:
+def _stride_sample(records: list, n: int) -> list:
+    """MIDI 기준 균등 간격으로 최대 n개 선택."""
+    if not records or n <= 0:
         return []
     key = lambda r: r.get('answer_midi') or r.get('root_midi', 0)
     sorted_recs = sorted(records, key=key)
-    if len(sorted_recs) <= limit:
+    if len(sorted_recs) <= n:
         return sorted_recs
-    step = len(sorted_recs) / limit
-    return [sorted_recs[int(i * step)] for i in range(limit)]
+    step = len(sorted_recs) / n
+    return [sorted_recs[int(i * step)] for i in range(n)]
+
+
+def sample_diverse(records: list, limit: int, rng: random.Random) -> list:
+    """MIDI 기준 균등 간격으로 최대 limit개 선택 (음역 다양성 극대화).
+    같음/다름 정답 유형(same_diff, height_compare)은 같음:다름 = 5:5 비율 유지.
+    한쪽이 limit//2 미만이면 그 수만큼만 선택 (비율 유지, 총 개수 미달 허용).
+    """
+    if not records or limit <= 0:
+        return []
+    if records[0].get('answer_type') in ('same_diff', 'height_compare'):
+        half      = limit // 2
+        same_pool = [r for r in records if r.get('answer') == '같음']
+        diff_pool = [r for r in records if r.get('answer') == '다름']
+        # 양쪽 최소값 기준으로 equal_n 결정 → 5:5 달성
+        equal_n   = min(half, len(same_pool), len(diff_pool))
+        remaining = limit - equal_n * 2
+        # 5:5 달성 후 limit 미달이면 더 큰 풀에서 추가 (비율 허용)
+        if len(same_pool) >= len(diff_pool):
+            same_n = min(equal_n + remaining, len(same_pool))
+            diff_n = equal_n
+        else:
+            same_n = equal_n
+            diff_n = min(equal_n + remaining, len(diff_pool))
+        return _stride_sample(same_pool, same_n) + _stride_sample(diff_pool, diff_n)
+    return _stride_sample(records, limit)
 
 
 def generate_per_step_limit(step_ids: list, limit: int, seed: Optional[int]) -> list:
