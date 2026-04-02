@@ -196,58 +196,13 @@ class SingleNoteGenerator:
         return self.rng.choice(candidates)
 
     def _build_same_diff(self, answer_midi, pool, octaves):
-        first   = midi_to_note(answer_midi)
-        is_same = self.rng.choice([True, False])
-        if is_same:
-            second, label = first, '같음'
-        else:
-            answer_name = first[:-1]
-            others = [
-                m for m in pool_to_midi_range(pool, [3, 4, 5, 6])
-                if midi_to_note(m)[:-1] != answer_name
-                and abs(m - answer_midi) <= 12
-            ]
-            if not others:
-                second, label = first, '같음'
-            else:
-                second, label = midi_to_note(self.rng.choice(others)), '다름'
-        return [first, second], label
+        return self.rng.choice(_build_sn_same_diff_cases(answer_midi, pool, octaves))
 
     def _build_choices(self, answer_midi, pool, octaves,
                        num_choices, distractor_strategy, proximity_strategy):
-        answer_name = midi_to_note(answer_midi)[:-1]
-        all_midi    = pool_to_midi_range(pool, octaves)
-        candidates  = [m for m in all_midi if midi_to_note(m)[:-1] != answer_name]
-        if len(pool) <= 2 or distractor_strategy == 'use_all':
-            distractor_pool = candidates
-        else:
-            distractor_pool = self._sort_by_proximity(answer_midi, candidates, proximity_strategy)
-
-        distractors = self._pick_unique_name(distractor_pool, num_choices - 1)
-        choices = [midi_to_note(answer_midi)] + [midi_to_note(d) for d in distractors]
-        self.rng.shuffle(choices)
-        return choices
-
-    def _sort_by_proximity(self, answer_midi, candidates, strategy):
-        if strategy == 'asc_by_distance':
-            return sorted(candidates, key=lambda m: semitone_distance(m, answer_midi))
-        elif strategy == 'desc_by_distance':
-            return sorted(candidates, key=lambda m: semitone_distance(m, answer_midi), reverse=True)
-        else:
-            pool = candidates[:]
-            self.rng.shuffle(pool)
-            return pool
-
-    def _pick_unique_name(self, candidates, n):
-        seen, result = set(), []
-        for m in candidates:
-            name = midi_to_note(m)[:-1]
-            if name not in seen:
-                seen.add(name)
-                result.append(m)
-            if len(result) == n:
-                break
-        return result
+        return _build_sn_choices(answer_midi, pool, octaves,
+                                num_choices, distractor_strategy,
+                                proximity_strategy, self.rng)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -295,6 +250,63 @@ def _height_compare_cases(root_midi: int, symbol: str, ipool: list, direction: s
                 cases.append((p1_notes + [midi_to_note(p2l), midi_to_note(p2h)], '다름'))
 
     return cases
+
+
+def _build_sn_same_diff_cases(answer_midi: int, pool: list, octaves: list) -> list:
+    """단일음 같음/다름: 주어진 answer_midi에 대한 모든 (present_notes, label) 반환."""
+    first = midi_to_note(answer_midi)
+    answer_name = first[:-1]
+    cases = [([first, first], '같음')]
+    for m in pool_to_midi_range(pool, octaves):
+        if midi_to_note(m)[:-1] != answer_name and abs(m - answer_midi) <= 12:
+            cases.append(([first, midi_to_note(m)], '다름'))
+    return cases
+
+
+def _build_sn_choices(answer_midi: int, pool: list, octaves: list,
+                      num_choices: int, dist_strategy: str,
+                      prox_strategy: str, rng: random.Random) -> list:
+    """단일음 선택지 생성 (name_2/3/4choice)."""
+    answer_name = midi_to_note(answer_midi)[:-1]
+    all_midi = pool_to_midi_range(pool, octaves)
+    candidates = [m for m in all_midi if midi_to_note(m)[:-1] != answer_name]
+    if len(pool) <= 2 or dist_strategy == 'use_all':
+        distractor_pool = candidates
+    elif prox_strategy == 'asc_by_distance':
+        distractor_pool = sorted(candidates, key=lambda m: semitone_distance(m, answer_midi))
+    elif prox_strategy == 'desc_by_distance':
+        distractor_pool = sorted(candidates, key=lambda m: semitone_distance(m, answer_midi), reverse=True)
+    else:
+        distractor_pool = candidates[:]
+        rng.shuffle(distractor_pool)
+    seen, distractors = set(), []
+    for m in distractor_pool:
+        name = midi_to_note(m)[:-1]
+        if name not in seen:
+            seen.add(name)
+            distractors.append(m)
+        if len(distractors) == num_choices - 1:
+            break
+    choices = [midi_to_note(answer_midi)] + [midi_to_note(d) for d in distractors]
+    rng.shuffle(choices)
+    return choices
+
+
+def _build_int_name_choices(symbol: str, ipool: list, num_choices: int,
+                            prox_strategy: str, rng: random.Random) -> list:
+    """음정 이름 선택지 생성 (name_2/3/4choice)."""
+    target_st = interval_semitones(symbol)
+    pool_syms = [s for s in ipool if s != symbol]
+    if prox_strategy == 'asc_by_distance':
+        pool_syms.sort(key=lambda s: abs(interval_semitones(s) - target_st))
+    elif prox_strategy == 'desc_by_distance':
+        pool_syms.sort(key=lambda s: abs(interval_semitones(s) - target_st), reverse=True)
+    else:
+        rng.shuffle(pool_syms)
+    distractors = pool_syms[:num_choices - 1]
+    choices = [interval_name_ko(symbol)] + [interval_name_ko(s) for s in distractors]
+    rng.shuffle(choices)
+    return choices
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -408,18 +420,8 @@ class IntervalGenerator:
         return present, label
 
     def _build_name_choices(self, symbol, ipool, num_choices, proximity_strategy):
-        target_st = interval_semitones(symbol)
-        pool_syms = [s for s in ipool if s != symbol]
-        if proximity_strategy == 'asc_by_distance':
-            pool_syms.sort(key=lambda s: abs(interval_semitones(s) - target_st))
-        elif proximity_strategy == 'desc_by_distance':
-            pool_syms.sort(key=lambda s: abs(interval_semitones(s) - target_st), reverse=True)
-        else:
-            self.rng.shuffle(pool_syms)
-        distractors = pool_syms[:num_choices - 1]
-        choices = [interval_name_ko(symbol)] + [interval_name_ko(s) for s in distractors]
-        self.rng.shuffle(choices)
-        return choices
+        return _build_int_name_choices(symbol, ipool, num_choices,
+                                       proximity_strategy, self.rng)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -530,22 +532,13 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                 answer_name = answer[:-1]
 
                 if answer_type == 'same_diff':
-                    records.append({**base,
-                        'question_type': 'single_note', 'answer_type': answer_type,
-                        'direction': '-', 'answer': '같음', 'answer_midi': answer_midi,
-                        'present_notes': [answer, answer], 'choices': ['같음', '다름'],
-                        'total_difficulty': octave_difficulty(answer_midi),
-                    })
-                    all_second = pool_to_midi_range(pool, FULL_OCTAVES)
-                    for second_midi in all_second:
-                        if midi_to_note(second_midi)[:-1] != answer_name and abs(second_midi - answer_midi) <= 12:
-                            records.append({**base,
-                                'question_type': 'single_note', 'answer_type': answer_type,
-                                'direction': '-', 'answer': '다름', 'answer_midi': answer_midi,
-                                'present_notes': [answer, midi_to_note(second_midi)],
-                                'choices': ['같음', '다름'],
-                                'total_difficulty': octave_difficulty(answer_midi),
-                            })
+                    for present_notes, sd_label in _build_sn_same_diff_cases(answer_midi, pool, FULL_OCTAVES):
+                        records.append({**base,
+                            'question_type': 'single_note', 'answer_type': answer_type,
+                            'direction': '-', 'answer': sd_label, 'answer_midi': answer_midi,
+                            'present_notes': present_notes, 'choices': ['같음', '다름'],
+                            'total_difficulty': octave_difficulty(answer_midi),
+                        })
 
                 elif answer_type == 'piano_subj':
                     records.append({**base,
@@ -556,27 +549,8 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                     })
 
                 else:
-                    candidates = [m for m in midi_pool if midi_to_note(m)[:-1] != answer_name]
-                    if len(pool) <= 2 or dist_strategy == 'use_all':
-                        distractor_pool = candidates
-                    elif prox_strategy == 'asc_by_distance':
-                        distractor_pool = sorted(candidates, key=lambda m: semitone_distance(m, answer_midi))
-                    elif prox_strategy == 'desc_by_distance':
-                        distractor_pool = sorted(candidates, key=lambda m: semitone_distance(m, answer_midi), reverse=True)
-                    else:
-                        distractor_pool = candidates[:]
-                        rng.shuffle(distractor_pool)
-
-                    seen, distractors = set(), []
-                    for m in distractor_pool:
-                        nm = midi_to_note(m)[:-1]
-                        if nm not in seen:
-                            seen.add(nm)
-                            distractors.append(m)
-                        if len(distractors) == num_choices - 1:
-                            break
-                    choices = [answer] + [midi_to_note(d) for d in distractors]
-                    rng.shuffle(choices)
+                    choices = _build_sn_choices(answer_midi, pool, FULL_OCTAVES,
+                                               num_choices, dist_strategy, prox_strategy, rng)
                     records.append({**base,
                         'question_type': 'single_note', 'answer_type': answer_type,
                         'direction': '-', 'answer': answer, 'answer_midi': answer_midi,
@@ -598,7 +572,10 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                 root_note    = midi_to_note(root_midi)
                 upper_midi   = build_interval_midi(root_midi, symbol, direction)
                 upper_note   = midi_to_note(upper_midi)
-                present_base = [root_note, upper_note]
+                if direction == 'descending':
+                    present_base = [upper_note, root_note]
+                else:
+                    present_base = [root_note, upper_note]
                 int_base = {**base,
                     'question_type':      'interval',
                     'answer_type':        answer_type,
@@ -635,17 +612,7 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
                     })
 
                 else:  # name_2/3/4choice
-                    target_st = interval_semitones(symbol)
-                    pool_syms = [s for s in ipool if s != symbol]
-                    if prox_strategy == 'asc_by_distance':
-                        pool_syms.sort(key=lambda s: abs(interval_semitones(s) - target_st))
-                    elif prox_strategy == 'desc_by_distance':
-                        pool_syms.sort(key=lambda s: abs(interval_semitones(s) - target_st), reverse=True)
-                    else:
-                        rng.shuffle(pool_syms)
-                    distractors = pool_syms[:num_choices - 1]
-                    choices = [interval_name_ko(symbol)] + [interval_name_ko(s) for s in distractors]
-                    rng.shuffle(choices)
+                    choices = _build_int_name_choices(symbol, ipool, num_choices, prox_strategy, rng)
                     records.append({**int_base,
                         'present_notes': present_base, 'choices': choices,
                     })
