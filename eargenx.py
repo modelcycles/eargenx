@@ -266,9 +266,17 @@ def _build_sn_same_diff_cases(answer_midi: int, pool: list, octaves: list) -> li
 def _build_sn_choices(answer_midi: int, pool: list, octaves: list,
                       num_choices: int, dist_strategy: str,
                       prox_strategy: str, rng: random.Random) -> list:
-    """단일음 선택지 생성 (name_2/3/4choice)."""
+    """단일음 선택지 생성 (name_2/3/4choice).
+    보기 음역은 정답 옥타브 기준으로 C3-B4 또는 C4-B5 중 선택."""
+    answer_octave = (answer_midi // 12) - 1
+    if answer_octave <= 3:
+        choice_octaves = [3, 4]
+    elif answer_octave >= 5:
+        choice_octaves = [4, 5]
+    else:
+        choice_octaves = rng.choice([[3, 4], [4, 5]])
     answer_name = midi_to_note(answer_midi)[:-1]
-    all_midi = pool_to_midi_range(pool, octaves)
+    all_midi = pool_to_midi_range(pool, choice_octaves)
     candidates = [m for m in all_midi if midi_to_note(m)[:-1] != answer_name]
     if len(pool) <= 2 or dist_strategy == 'use_all':
         distractor_pool = candidates
