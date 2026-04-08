@@ -616,7 +616,7 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
 
                 elif answer_type in ('interval_subj', 'keyboard_subj'):
                     records.append({**int_base,
-                        'present_notes': present_base, 'choices': None,
+                        'present_notes': [root_note, upper_note], 'choices': None,
                     })
 
                 else:  # name_2/3/4choice
