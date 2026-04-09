@@ -362,8 +362,16 @@ def _build_sn_choices(answer_midi: int, pool: list, octaves: list,
         if len(distractors) == num_choices - 1:
             break
     choices = [midi_to_note(answer_midi)] + [midi_to_note(d) for d in distractors]
-    rng.shuffle(choices)
+    choices.sort(key=lambda n: (_SN_LETTER_ORDER[n[0]], 0 if len(n) == 2 else 1, int(n[-1])))  # C D E F G A B 순, 임시표 뒤
     return choices
+
+
+# 음정 선택지 정렬용 품질 우선순위: 장(M)/완전(P) → 단(m)/증(A)
+# 단일음 선택지 정렬: C D E F G A B 순
+_SN_LETTER_ORDER = {'C': 0, 'D': 1, 'E': 2, 'F': 3, 'G': 4, 'A': 5, 'B': 6}
+
+# 음정 선택지 정렬용 품질 우선순위: 장(M)/완전(P) → 단(m)/증(A)
+_INTERVAL_QUALITY_ORDER = {'P': 0, 'M': 0, 'm': 1, 'A': 1, 'd': 2}
 
 
 def _build_int_name_choices(symbol: str, ipool: list, num_choices: int,
@@ -378,9 +386,10 @@ def _build_int_name_choices(symbol: str, ipool: list, num_choices: int,
     else:
         rng.shuffle(pool_syms)
     distractors = pool_syms[:num_choices - 1]
-    choices = [interval_name_ko(symbol)] + [interval_name_ko(s) for s in distractors]
-    rng.shuffle(choices)
-    return choices
+    all_syms = [symbol] + distractors
+    # 낮은 도수 → 높은 도수, 같은 도수 내 장(M)/완전(P) 먼저
+    all_syms.sort(key=lambda s: (int(s[-1]), _INTERVAL_QUALITY_ORDER[s[0]]))
+    return [interval_name_ko(s) for s in all_syms]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
