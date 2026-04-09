@@ -100,6 +100,72 @@ def build_interval_midi(root_midi: int, symbol: str, direction: str) -> int:
     return root_midi + st
 
 
+# 이명동음 계산용 상수 — 온음계 음자리(C=0…B=6)와 그 자연 피치클래스
+_DIATONIC_LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B']
+_DIATONIC_PCS     = [ 0,   2,   4,   5,   7,   9,  11]
+
+# 각 음정 기호가 온음계에서 몇 단계 이동하는지
+_INTERVAL_DIATONIC_STEPS: dict = {
+    'P1': 0,
+    'm2': 1, 'M2': 1,
+    'm3': 2, 'M3': 2,
+    'P4': 3, 'A4': 3,
+    'P5': 4,
+    'm6': 5, 'M6': 5,
+    'm7': 6, 'M7': 6,
+}
+
+# ## / bb 충돌 시 루트를 이명동음으로 전환하기 위한 대응 쌍
+_ENHARMONIC_ALT: dict = {
+    'C#': 'Db', 'Db': 'C#',
+    'D#': 'Eb', 'Eb': 'D#',
+    'F#': 'Gb', 'Gb': 'F#',
+    'G#': 'Ab', 'Ab': 'G#',
+    'A#': 'Bb', 'Bb': 'A#',
+}
+
+
+def enharmonic_upper_note(root_note: str, upper_midi: int, symbol: str, direction: str) -> str:
+    """음정 이론에 맞는 이명동음 표기로 상단(또는 하단) 음 이름을 반환한다.
+
+    예) root='C4', symbol='A4', direction='ascending'  → 'F#4'  (Gb4 아님)
+        root='C4', symbol='M3', direction='descending' → 'Ab3'  (G#3 아님)
+    """
+    root_name        = root_note[:-1]           # 옥타브 숫자 제거
+    root_letter      = root_name[0]             # 첫 글자가 음자리
+    root_letter_idx  = _DIATONIC_LETTERS.index(root_letter)
+
+    diatonic_steps   = _INTERVAL_DIATONIC_STEPS.get(symbol, 0)
+    if direction == 'descending':
+        upper_letter_idx = (root_letter_idx - diatonic_steps) % 7
+    else:
+        upper_letter_idx = (root_letter_idx + diatonic_steps) % 7
+
+    upper_letter = _DIATONIC_LETTERS[upper_letter_idx]
+    natural_pc   = _DIATONIC_PCS[upper_letter_idx]
+    target_pc    = upper_midi % 12
+
+    diff = (target_pc - natural_pc + 12) % 12
+    if diff > 6:
+        diff -= 12   # 큰 샵 대신 플랫 선호 (예: 11 → -1)
+
+    if diff == 0:
+        note_name = upper_letter
+    elif diff == 1:
+        note_name = upper_letter + '#'
+    elif diff == -1:
+        note_name = upper_letter + 'b'
+    elif diff == 2:
+        note_name = upper_letter + '##'
+    elif diff == -2:
+        note_name = upper_letter + 'bb'
+    else:
+        return midi_to_note(upper_midi)  # 예외 케이스 폴백
+
+    upper_octave = upper_midi // 12 - 1
+    return f"{note_name}{upper_octave}"
+
+
 def interval_to_midi_pair(root_midi: int, symbol: str, direction: str) -> tuple:
     st = interval_semitones(symbol)
     if direction == 'descending':
@@ -579,7 +645,22 @@ def generate_all_exhaustive(step_ids: list, seed: Optional[int] = None) -> list:
             for root_midi, symbol in all_pairs:
                 root_note    = midi_to_note(root_midi)
                 upper_midi   = build_interval_midi(root_midi, symbol, direction)
-                upper_note   = midi_to_note(upper_midi)
+                upper_note   = enharmonic_upper_note(root_note, upper_midi, symbol, direction)
+
+                # ## / bb 등장 시 루트를 이명동음으로 전환 후 재시도; 그래도 안 되면 제외
+                if '##' in upper_note or 'bb' in upper_note:
+                    alt_root_name = _ENHARMONIC_ALT.get(root_note[:-1])
+                    if alt_root_name:
+                        alt_root_note = alt_root_name + root_note[-1]
+                        alt_upper_note = enharmonic_upper_note(alt_root_note, upper_midi, symbol, direction)
+                        if '##' not in alt_upper_note and 'bb' not in alt_upper_note:
+                            root_note  = alt_root_note
+                            upper_note = alt_upper_note
+                        else:
+                            continue
+                    else:
+                        continue
+
                 if direction == 'descending':
                     present_base = [upper_note, root_note]
                 else:
