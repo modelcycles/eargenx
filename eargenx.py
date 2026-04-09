@@ -814,6 +814,14 @@ def record_to_row(q: dict, range_label: str) -> dict:
     choices_str = ', '.join(choices) if choices else '(주관식)'
     diff_label  = f"Lv.{q['difficulty_level']} ({DIFFICULTY_RULES[q['difficulty_level']][0]})"
 
+    answer_type = q.get('answer_type', '')
+    if answer_type in ('same_diff', 'height_compare'):
+        answer_attr = '-'
+    elif q['question_type'] == 'single_note':
+        answer_attr = q['answer']
+    else:                                        # interval (주관식 포함)
+        answer_attr = q['answer_interval_ko']
+
     return {
         '#':             q['q_num'],
         'range':         range_label,
@@ -826,6 +834,7 @@ def record_to_row(q: dict, range_label: str) -> dict:
         'present':       present_str,
         'answer':        answer_str,
         'choices':       choices_str,
+        'answer_attr':   answer_attr,
     }
 
 
